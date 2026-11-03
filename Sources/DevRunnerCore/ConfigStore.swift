@@ -1,10 +1,10 @@
 import Foundation
 
-struct ConfigStore: Sendable {
+package struct ConfigStore: Sendable {
     var fileURL: URL
     private(set) var isCorrupt = false
 
-    static var defaultFileURL: URL {
+    package static var defaultFileURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/dev-runner/config.json")
     }
@@ -13,7 +13,7 @@ struct ConfigStore: Sendable {
         defaultFileURL.deletingLastPathComponent()
     }
 
-    init(fileURL: URL) {
+    package init(fileURL: URL) {
         self.fileURL = fileURL
     }
 

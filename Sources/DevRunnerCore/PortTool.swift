@@ -19,7 +19,7 @@ enum LsofOutput {
     }
 }
 
-struct PortTool: Sendable {
+package struct PortTool: Sendable {
     var run: @Sendable (_ executable: String, _ arguments: [String]) -> String
     var signal: @Sendable (_ pid: Int32, _ signal: Int32) -> Void
 
@@ -38,7 +38,7 @@ struct PortTool: Sendable {
         return pids
     }
 
-    static func live() -> PortTool {
+    package static func live() -> PortTool {
         PortTool(
             run: { executable, arguments in
                 let process = Process()

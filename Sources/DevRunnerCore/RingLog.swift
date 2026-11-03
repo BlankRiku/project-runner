@@ -28,7 +28,7 @@ struct LineBuffer: Equatable, Sendable {
     }
 }
 
-struct RingLog: Equatable, Sendable {
+package struct RingLog: Equatable, Sendable {
     private(set) var lines: [String] = []
     var capacity: Int = 1000
 
@@ -44,7 +44,7 @@ struct RingLog: Equatable, Sendable {
         lines.removeAll()
     }
 
-    func filtered(query: String) -> [String] {
+    package func filtered(query: String) -> [String] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return lines }
         return lines.filter { $0.localizedCaseInsensitiveContains(trimmed) }

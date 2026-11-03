@@ -1,6 +1,6 @@
 import Foundation
 
-enum IdeaAdapter: String, Codable, Equatable, Sendable {
+package enum IdeaAdapter: String, Codable, Equatable, Sendable {
     case tomcat
     case npm
     case python
@@ -8,35 +8,35 @@ enum IdeaAdapter: String, Codable, Equatable, Sendable {
     case unmapped
 }
 
-enum DebugInjection: String, Codable, Equatable, Sendable {
+package enum DebugInjection: String, Codable, Equatable, Sendable {
     case none
     case javaToolOptions
     case catalinaOpts
 }
 
-struct IdeaOrigin: Codable, Equatable, Sendable {
-    var configurationName: String
-    var configurationType: String
-    var adapter: IdeaAdapter
+package struct IdeaOrigin: Codable, Equatable, Sendable {
+    package var configurationName: String
+    package var configurationType: String
+    package var adapter: IdeaAdapter
 }
 
-struct RunnerConfig: Codable, Equatable, Sendable, Identifiable {
-    var id: UUID
-    var name: String
-    var command: String
-    var workingDirectory: String
-    var env: [String: String]
-    var debugEnabled: Bool
-    var debugPort: Int
-    var portToCheck: Int?
-    var commandEdited: Bool
-    var idea: IdeaOrigin?
-    var debugInjection: DebugInjection
-    var importNote: String?
-    var tomcatContextPath: String?
-    var tomcatDocBase: String?
+package struct RunnerConfig: Codable, Equatable, Sendable, Identifiable {
+    package var id: UUID
+    package var name: String
+    package var command: String
+    package var workingDirectory: String
+    package var env: [String: String]
+    package var debugEnabled: Bool
+    package var debugPort: Int
+    package var portToCheck: Int?
+    package var commandEdited: Bool
+    package var idea: IdeaOrigin?
+    package var debugInjection: DebugInjection
+    package var importNote: String?
+    package var tomcatContextPath: String?
+    package var tomcatDocBase: String?
 
-    init(
+    package init(
         id: UUID = UUID(),
         name: String,
         command: String,
@@ -74,7 +74,7 @@ struct RunnerConfig: Codable, Equatable, Sendable, Identifiable {
         case tomcatContextPath, tomcatDocBase
     }
 
-    init(from decoder: Decoder) throws {
+    package init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
@@ -93,13 +93,13 @@ struct RunnerConfig: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-struct Project: Codable, Equatable, Sendable, Identifiable {
-    var id: UUID
-    var name: String
-    var rootPath: String
-    var runners: [RunnerConfig]
+package struct Project: Codable, Equatable, Sendable, Identifiable {
+    package var id: UUID
+    package var name: String
+    package var rootPath: String
+    package var runners: [RunnerConfig]
 
-    init(id: UUID = UUID(), name: String, rootPath: String, runners: [RunnerConfig] = []) {
+    package init(id: UUID = UUID(), name: String, rootPath: String, runners: [RunnerConfig] = []) {
         self.id = id
         self.name = name
         self.rootPath = rootPath
@@ -107,16 +107,16 @@ struct Project: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-enum RunnerPhase: String, Equatable, Sendable {
+package enum RunnerPhase: String, Equatable, Sendable {
     case stopped
     case starting
     case running
     case crashed
 }
 
-struct RunnerRuntime: Equatable, Sendable {
-    var phase: RunnerPhase
-    var pid: Int32?
+package struct RunnerRuntime: Equatable, Sendable {
+    package var phase: RunnerPhase
+    package var pid: Int32?
 
     static let stopped = RunnerRuntime(phase: .stopped, pid: nil)
 }
