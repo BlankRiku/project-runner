@@ -24,6 +24,10 @@ struct DevRunnerApp: App {
 
     init() {
         MenuBarIcon.register()
+        if let url = Bundle.module.url(forResource: "AppIcon", withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            NSApplication.shared.applicationIconImage = image
+        }
     }
 
     var body: some Scene {
