@@ -2,6 +2,14 @@ import AppKit
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            MainActor.assumeIsolated {
+                MenuBarIcon.apply(count: MenuBarIcon.latestCount)
+            }
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             AppModel.terminationTarget?.session.stopAllForTermination()
@@ -14,134 +22,136 @@ struct DevRunnerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
 
+    init() {
+        MenuBarIcon.register()
+    }
+
     var body: some Scene {
-        MenuBarExtra {
+        let count = model.activeCount
+        MenuBarIcon.scheduleApply(count: count)
+        return MenuBarExtra {
             RootView()
                 .environmentObject(model)
         } label: {
-            HStack(spacing: 4) {
-                MenuBarMark()
-                if model.activeCount > 0 {
-                    Text("\(model.activeCount)")
-                }
-            }
+            Image(nsImage: MenuBarIcon.image)
         }
         .menuBarExtraStyle(.window)
     }
 }
 
+@MainActor
 enum MenuBarIcon {
-    /// 16×16 grid. Three bars into a run arrow, sized for the menu bar slot.
-    static func path(in rect: CGRect) -> NSBezierPath {
-        let sx = rect.width / 16
-        let sy = rect.height / 16
-        let ox = rect.minX
-        let oy = rect.minY
-        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: ox + x * sx, y: oy + y * sy)
+    /// Point height of the menu bar glyph.
+    static let menuBarHeight: CGFloat = 18
+    static let templateName = "MenuBarIconTemplate"
+
+    static let image: NSImage = load()
+
+    static var aspectRatio: CGFloat {
+        image.size.width / max(image.size.height, 1)
+    }
+
+    fileprivate static var latestCount = 0
+    private static var applyScheduled = false
+
+    static func register() {
+        image.isTemplate = true
+        image.setName(NSImage.Name(templateName))
+    }
+
+    static func scheduleApply(count: Int) {
+        latestCount = count
+        guard !applyScheduled else { return }
+        applyScheduled = true
+        DispatchQueue.main.async {
+            applyScheduled = false
+            apply(count: latestCount)
         }
-        let path = NSBezierPath()
-        func bar(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ cut: CGFloat) {
-            path.move(to: point(x, y))
-            path.line(to: point(x + w - cut, y))
-            path.line(to: point(x + w, y + h / 2))
-            path.line(to: point(x + w - cut, y + h))
-            path.line(to: point(x, y + h))
-            path.close()
+    }
+
+    static func apply(count: Int) {
+        latestCount = count
+        let icon = image
+        icon.isTemplate = true
+        for button in statusButtons() {
+            button.image = icon
+            button.image?.isTemplate = true
+            button.imageScaling = .scaleProportionallyDown
+            button.imageHugsTitle = true
+            button.imagePosition = count > 0 ? .imageLeading : .imageOnly
+            button.title = count > 0 ? "\(count)" : ""
+            button.setAccessibilityLabel("Dev Runner")
         }
-        bar(1, 1.5, 8, 3, 1.5)
-        bar(1, 6.5, 9.2, 3, 1.5)
-        bar(1, 11.5, 8, 3, 1.5)
-        path.move(to: point(10.2, 1.5))
-        path.line(to: point(15, 8))
-        path.line(to: point(10.2, 14.5))
-        path.close()
-        return path
+    }
+
+    private static func statusButtons() -> [NSStatusBarButton] {
+        var found: [NSStatusBarButton] = []
+        for window in NSApp.windows {
+            func walk(_ view: NSView?) {
+                guard let view else { return }
+                if let button = view as? NSStatusBarButton {
+                    found.append(button)
+                }
+                for subview in view.subviews {
+                    walk(subview)
+                }
+            }
+            walk(window.contentView)
+        }
+        return found
+    }
+
+    private static func load() -> NSImage {
+        guard let url = Bundle.module.url(forResource: "MenuBarIcon", withExtension: "png"),
+              let source = NSImage(contentsOf: url),
+              let cgImage = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            preconditionFailure("MenuBarIcon.png is missing from the app bundle")
+        }
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            preconditionFailure("MenuBarIcon.png could not be converted to a template mask")
+        }
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            let alpha = pixels[i + 3]
+            pixels[i] = 0
+            pixels[i + 1] = 0
+            pixels[i + 2] = 0
+            pixels[i + 3] = alpha
+        }
+        guard let maskCG = context.makeImage() else {
+            preconditionFailure("MenuBarIcon.png mask export failed")
+        }
+        let image = NSImage(cgImage: maskCG, size: NSSize(width: width, height: height))
+        let aspect = CGFloat(width) / CGFloat(height)
+        image.size = NSSize(width: menuBarHeight * aspect, height: menuBarHeight)
+        image.isTemplate = true
+        image.accessibilityDescription = "Dev Runner"
+        return image
     }
 }
 
 struct MenuBarMark: View {
     var height: CGFloat = 16
-    /// Popover is always dark. The menu bar follows the system appearance.
-    var lightGlyph = false
 
     var body: some View {
-        TemplateGlyph(lightGlyph: lightGlyph)
-            .frame(width: height, height: height)
+        Image(nsImage: MenuBarIcon.image)
+            .renderingMode(.template)
+            .resizable()
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: height * MenuBarIcon.aspectRatio, height: height)
             .accessibilityLabel("Dev Runner")
-    }
-}
-
-private struct TemplateGlyph: NSViewRepresentable {
-    var lightGlyph: Bool
-
-    func makeNSView(context: Context) -> TemplateGlyphView {
-        let view = TemplateGlyphView(frame: .zero)
-        view.lightGlyph = lightGlyph
-        return view
-    }
-
-    func updateNSView(_ view: TemplateGlyphView, context: Context) {
-        view.lightGlyph = lightGlyph
-    }
-}
-
-private final class TemplateGlyphView: NSView {
-    var lightGlyph = false {
-        didSet { needsDisplay = true }
-    }
-
-    private var observingTheme = false
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard !observingTheme else { return }
-        observingTheme = true
-        DistributedNotificationCenter.default().addObserver(
-            self,
-            selector: #selector(themeChanged),
-            name: Notification.Name("AppleInterfaceThemeChangedNotification"),
-            object: nil
-        )
-    }
-
-    deinit {
-        DistributedNotificationCenter.default().removeObserver(self)
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
-
-    @objc private func themeChanged() {
-        needsDisplay = true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        glyphColor.setFill()
-        MenuBarIcon.path(in: bounds).fill()
-    }
-
-    private var glyphColor: NSColor {
-        drawsLightGlyph ? .white : .black
-    }
-
-    private var drawsLightGlyph: Bool {
-        if lightGlyph { return true }
-        if effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
-            return true
-        }
-        let domain = UserDefaults.standard.persistentDomain(forName: UserDefaults.globalDomain)
-        return (domain?["AppleInterfaceStyle"] as? String) == "Dark"
     }
 }

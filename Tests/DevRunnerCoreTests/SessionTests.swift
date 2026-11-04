@@ -42,7 +42,8 @@ final class SessionTests: XCTestCase {
     func testBusyPortDoesNotSpawnOrSignal() {
         signals.output = "42\n"
         let project = add(command: "echo hi", port: 8080)
-        session.start(projectID: project.id, runnerID: project.runners[0].id)
+        let failure = session.start(projectID: project.id, runnerID: project.runners[0].id)
+        XCTAssertEqual(failure, "Porta 8080 occupata.")
         XCTAssertTrue(spawner.requests.isEmpty)
         XCTAssertTrue(signals.killed.isEmpty)
         XCTAssertEqual(session.runtime(for: project.runners[0].id).phase, .stopped)

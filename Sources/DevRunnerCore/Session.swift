@@ -122,18 +122,22 @@ package final class Session {
         changed()
     }
 
-    package func start(projectID: UUID, runnerID: UUID) {
-        guard let runner = runner(projectID: projectID, runnerID: runnerID) else { return }
+    /// Starts the runner. Returns a short failure reason for the UI, or `nil` if start was accepted or ignored.
+    @discardableResult
+    package func start(projectID: UUID, runnerID: UUID) -> String? {
+        guard let runner = runner(projectID: projectID, runnerID: runnerID) else { return nil }
         let phase = runtime(for: runnerID).phase
-        if phase == .starting || phase == .running { return }
+        if phase == .starting || phase == .running { return nil }
         if runner.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let message = runner.importNote ?? "Comando da completare."
             setRuntime(runnerID, RunnerRuntime(phase: .crashed, pid: nil))
-            appendLog(runner.importNote ?? "Comando da completare.", runnerID: runnerID)
-            return
+            appendLog(message, runnerID: runnerID)
+            return message
         }
         if let port = runner.portToCheck, ports.isBusy(port) {
-            appendLog("Porta \(port) occupata.", runnerID: runnerID)
-            return
+            let message = "Porta \(port) occupata."
+            appendLog(message, runnerID: runnerID)
+            return message
         }
         var command = runner.command
         if runner.idea?.adapter == .tomcat {
@@ -141,7 +145,7 @@ package final class Session {
             case .failure(let error):
                 setRuntime(runnerID, RunnerRuntime(phase: .crashed, pid: nil))
                 appendLog(error.description, runnerID: runnerID)
-                return
+                return error.description
             case .success(let launch):
                 command = launch.command
             }
@@ -160,11 +164,13 @@ package final class Session {
             handle.readOutput { chunk in sink.consume(chunk, runnerID: runnerID) }
             handle.onExit { code in sink.exited(code, runnerID: runnerID) }
             setRuntime(runnerID, RunnerRuntime(phase: .running, pid: handle.pid))
+            return nil
         } catch {
             handles[runnerID] = nil
             setRuntime(runnerID, RunnerRuntime(phase: .crashed, pid: nil))
             let message = (error as? SpawnError)?.description ?? error.localizedDescription
             appendLog(message, runnerID: runnerID)
+            return message
         }
     }
 
@@ -179,15 +185,16 @@ package final class Session {
         handle.signalGroup(terminateGrace: terminationGrace)
     }
 
-    package func restart(projectID: UUID, runnerID: UUID) {
+    @discardableResult
+    package func restart(projectID: UUID, runnerID: UUID) -> String? {
         projectIDByRunner[runnerID] = projectID
         let phase = runtime(for: runnerID).phase
         if phase == .starting || phase == .running {
             restartAfterStop.insert(runnerID)
             stop(runnerID: runnerID)
-        } else {
-            start(projectID: projectID, runnerID: runnerID)
+            return nil
         }
+        return start(projectID: projectID, runnerID: runnerID)
     }
 
     package func stopAll() {

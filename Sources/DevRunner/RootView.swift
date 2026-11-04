@@ -14,6 +14,7 @@ enum Theme {
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var notices = PopoverNotices.shared
     @State private var logsRunnerID: UUID?
 
     var body: some View {
@@ -25,22 +26,31 @@ struct RootView: View {
             }
         }
         .frame(width: 400)
-        .frame(maxHeight: 640)
         .background(Theme.background)
+        .fitMenuBarPanel(width: 400)
         .preferredColorScheme(.dark)
+    }
+
+    private var activeSummary: String {
+        switch model.activeCount {
+        case 0: return "Nessuno attivo"
+        case 1: return "1 attivo"
+        default: return "\(model.activeCount) attivi"
+        }
     }
 
     private var projectList: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                MenuBarMark(height: 16, lightGlyph: true)
+                MenuBarMark(height: 16)
                 Text("Dev Runner").font(.headline)
-                Spacer()
+                Spacer(minLength: 8)
                 HStack(spacing: 4) {
                     Circle()
                         .fill(model.activeCount > 0 ? Color.green : Color.gray)
                         .frame(width: 6, height: 6)
-                    Text("\(model.activeCount) attivo")
+                    Text(activeSummary)
+                        .lineLimit(1)
                 }
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)
@@ -49,6 +59,18 @@ struct RootView: View {
                 .foregroundStyle(model.activeCount > 0 ? Color.green : Theme.secondary)
             }
             .foregroundStyle(Theme.text)
+            if let confirm = notices.confirm {
+                PopoverConfirmCard(
+                    prompt: confirm,
+                    onCancel: { notices.cancelConfirm() },
+                    onConfirm: { notices.performConfirm() }
+                )
+            } else if let notice = notices.current {
+                PopoverBanner(notice: notice) {
+                    notices.dismiss(notice.id)
+                }
+            }
+            Divider().overlay(Theme.line)
             // A ScrollView's ideal height inside MenuBarExtra is about zero, so the rows never appear.
             MenuBarColumn(maxHeight: 440) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -126,8 +148,8 @@ private struct ProjectBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text(project.name).font(.headline)
-                Spacer()
+                Text(project.name).font(.headline).lineLimit(1)
+                Spacer(minLength: 8)
                 Text(projectIsActive ? "Attivo" : "Fermo")
                     .font(.caption2.weight(.semibold))
                     .padding(.horizontal, 6)
@@ -140,26 +162,30 @@ private struct ProjectBlock: View {
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            HStack(spacing: 6) {
-                IconButton(systemImage: "folder", help: "Finder") {
+            HStack(spacing: 4) {
+                WordButton(title: "Finder", systemImage: "folder", help: "Apri la cartella nel Finder") {
                     NSWorkspace.shared.open(URL(fileURLWithPath: project.rootPath))
                 }
-                IconButton(systemImage: "terminal", help: "Terminale") {
+                WordButton(title: "Terminale", systemImage: "terminal", help: "Apri la cartella nel Terminale") {
                     openTerminal(project.rootPath)
                 }
-                IconButton(systemImage: "arrow.triangle.2.circlepath", help: "Sincronizza da .idea") {
+                WordButton(title: "Sincronizza", systemImage: "arrow.triangle.2.circlepath", help: "Sincronizza da .idea") {
                     model.session.resync(projectID: project.id)
                 }
-                Spacer()
-                IconButton(systemImage: "trash", help: "Elimina progetto") {
-                    model.session.removeProject(projectID: project.id)
+                Spacer(minLength: 8)
+                WordButton(title: "Elimina", systemImage: "trash", help: "Elimina il progetto", role: .destructive) {
+                    confirmDelete()
                 }
+            }
+            if !project.runners.isEmpty {
+                Divider().overlay(Theme.line)
             }
             ForEach(project.runners) { runner in
                 RunnerRow(project: project, runner: runner, onLogs: { onLogs(runner.id) }, onEdit: { onEdit(runner) })
             }
         }
         .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 10))
     }
 
@@ -176,6 +202,28 @@ private struct ProjectBlock: View {
         process.arguments = ["-a", "Terminal", path]
         try? process.run()
     }
+
+    private func confirmDelete() {
+        let name = project.name
+        let projectID = project.id
+        let liveCount = project.runners.filter { runner in
+            let phase = model.runtime(for: runner.id).phase
+            return phase == .running || phase == .starting
+        }.count
+        var detail = "Il progetto «\(name)» verrà eliminato."
+        if liveCount == 1 {
+            detail += " Il runner avviato verrà fermato."
+        } else if liveCount > 1 {
+            detail += " I runner avviati verranno fermati."
+        }
+        PopoverNotices.shared.askConfirm(
+            title: "Eliminare il progetto «\(name)»?",
+            detail: detail
+        ) {
+            model.session.removeProject(projectID: projectID)
+            PopoverNotices.shared.show("Progetto eliminato")
+        }
+    }
 }
 
 private struct RunnerRow: View {
@@ -187,7 +235,7 @@ private struct RunnerRow: View {
 
     var body: some View {
         let phase = model.runtime(for: runner.id).phase
-        let busy = phase == .running || phase == .starting
+        let live = phase == .running || phase == .starting
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(runner.name).font(.subheadline.weight(.semibold)).lineLimit(1)
@@ -209,25 +257,18 @@ private struct RunnerRow: View {
             }
             HStack(spacing: 6) {
                 StatusDot(phase: phase)
-                Text(phase.label).font(.caption).foregroundStyle(Theme.secondary)
-                if let pid = model.runtime(for: runner.id).pid, busy {
-                    Text("PID \(String(pid))").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+                Text(phase.label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(phase == .stopped ? Theme.secondary : phase.tint)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                if let pid = model.runtime(for: runner.id).pid, live {
+                    Text("PID \(String(pid))").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary).lineLimit(1)
                 }
                 if let port = runner.portToCheck {
-                    Text(":\(plain(port))").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+                    Text(":\(plain(port))").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary).lineLimit(1)
                 }
-                Spacer(minLength: 4)
-                if !busy {
-                    Button {
-                        model.session.start(projectID: project.id, runnerID: runner.id)
-                    } label: {
-                        Label("Start", systemImage: "play.fill")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(.blue)
-                }
+                Spacer(minLength: 0)
             }
             if runner.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("Comando da completare").font(.caption).foregroundStyle(.orange)
@@ -235,76 +276,163 @@ private struct RunnerRow: View {
                     Text(note).font(.caption2).foregroundStyle(Theme.secondary)
                 }
             }
-            HStack(spacing: 6) {
-                if busy {
-                    ActionButton(title: "Stop", systemImage: "stop.fill", tint: .red) {
-                        model.session.stop(runnerID: runner.id)
+            VStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    WordButton(
+                        title: live ? "Ferma" : "Avvia",
+                        systemImage: live ? "stop.fill" : "play.fill",
+                        help: live ? "Ferma il runner" : "Avvia il runner",
+                        role: live ? .stop : .start,
+                        fillsRow: true
+                    ) {
+                        if live {
+                            model.session.stop(runnerID: runner.id)
+                        } else {
+                            reportStartFailure(
+                                model.session.start(projectID: project.id, runnerID: runner.id)
+                            )
+                        }
                     }
-                    ActionButton(title: "Restart", systemImage: "arrow.clockwise") {
-                        model.session.restart(projectID: project.id, runnerID: runner.id)
+                    WordButton(
+                        title: "Riavvia",
+                        systemImage: "arrow.clockwise",
+                        help: "Riavvia il runner",
+                        fillsRow: true,
+                        isEnabled: phase != .stopped
+                    ) {
+                        reportStartFailure(
+                            model.session.restart(projectID: project.id, runnerID: runner.id)
+                        )
                     }
-                } else if phase == .crashed {
-                    ActionButton(title: "Restart", systemImage: "arrow.clockwise") {
-                        model.session.restart(projectID: project.id, runnerID: runner.id)
-                    }
+                    WordButton(title: "Log", systemImage: "doc.text", help: "Apri il log", fillsRow: true, action: onLogs)
                 }
-                ActionButton(title: "Logs", systemImage: "doc.text") { onLogs() }
-                ActionButton(title: "Edit", systemImage: "pencil") { onEdit() }
-                IconButton(systemImage: "trash", help: "Elimina") {
-                    model.session.removeRunner(runnerID: runner.id)
-                }
-                if runner.portToCheck != nil {
-                    IconButton(systemImage: "network.slash", help: "Libera porta") {
+                HStack(spacing: 6) {
+                    WordButton(title: "Modifica", systemImage: "pencil", help: "Modifica il runner", fillsRow: true, action: onEdit)
+                    WordButton(
+                        title: "Libera porta",
+                        systemImage: "network.slash",
+                        help: runner.portToCheck.map { "Libera la porta \($0)" } ?? "Nessuna porta da liberare",
+                        fillsRow: true,
+                        isEnabled: runner.portToCheck != nil
+                    ) {
                         model.session.freePort(runnerID: runner.id)
+                    }
+                    WordButton(
+                        title: "Elimina",
+                        systemImage: "trash",
+                        help: "Elimina la configurazione",
+                        role: .destructive,
+                        fillsRow: true
+                    ) {
+                        confirmDelete(phase)
                     }
                 }
             }
         }
         .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.runner, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func confirmDelete(_ phase: RunnerPhase) {
+        let name = runner.name
+        let runnerID = runner.id
+        var detail = "La configurazione «\(name)» verrà eliminata."
+        if phase == .running {
+            detail += " Il runner è in esecuzione e verrà fermato."
+        } else if phase == .starting {
+            detail += " Il runner è in avvio e verrà fermato."
+        }
+        PopoverNotices.shared.askConfirm(
+            title: "Eliminare «\(name)»?",
+            detail: detail
+        ) {
+            model.session.removeRunner(runnerID: runnerID)
+            PopoverNotices.shared.show("Configurazione eliminata")
+        }
+    }
+
+    private func reportStartFailure(_ message: String?) {
+        guard let message else { return }
+        PopoverNotices.shared.showError("«\(runner.name)»: \(message)")
     }
 
     private func plain(_ value: Int) -> String { String(value) }
 }
 
-private struct IconButton: View {
-    var systemImage: String
-    var help: String
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.caption)
-                .frame(width: 26, height: 22)
-                .background(Theme.button, in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .help(help)
-    }
+private enum WordRole {
+    case normal, start, stop, destructive
 }
 
-private struct ActionButton: View {
+private struct WordButton: View {
     var title: String
     var systemImage: String
-    var tint: Color?
+    var help: String
+    var role: WordRole = .normal
+    var fillsRow = false
+    var isEnabled = true
     var action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Theme.button, in: RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(tint?.opacity(0.75) ?? Theme.line, lineWidth: 1)
-                )
+        Button {
+            guard isEnabled else { return }
+            action()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .imageScale(.small)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .lineLimit(1)
+                    .minimumScaleFactor(fillsRow ? 0.8 : 1)
+                if fillsRow {
+                    Spacer(minLength: 0)
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .frame(maxWidth: fillsRow ? .infinity : nil, minHeight: 26, alignment: .leading)
+            .background(fill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(border, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
-        .foregroundStyle(tint ?? Theme.text)
+        .foregroundStyle(foreground)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
+        .help(help)
+        .frame(maxWidth: fillsRow ? .infinity : nil, alignment: .leading)
+        .fixedSize(horizontal: !fillsRow, vertical: false)
+        .accessibilityLabel(title)
+    }
+
+    private var fill: Color {
+        switch role {
+        case .normal, .destructive: return Theme.button
+        case .start: return Color.blue.opacity(0.92)
+        case .stop: return Color.red.opacity(0.88)
+        }
+    }
+
+    private var foreground: Color {
+        switch role {
+        case .normal: return Theme.text
+        case .start, .stop: return .white
+        case .destructive: return .red
+        }
+    }
+
+    private var border: Color {
+        switch role {
+        case .normal: return Theme.line
+        case .start: return Color.blue.opacity(0.95)
+        case .stop: return Color.red.opacity(0.95)
+        case .destructive: return Color.red.opacity(0.45)
+        }
     }
 }
 
@@ -317,20 +445,21 @@ private extension RunnerPhase {
         case .crashed: return "Errore"
         }
     }
-}
 
-private struct StatusDot: View {
-    var phase: RunnerPhase
-    var body: some View {
-        Circle().fill(color).frame(width: 8, height: 8)
-    }
-    private var color: Color {
-        switch phase {
+    var tint: Color {
+        switch self {
         case .stopped: return .gray
         case .starting: return .yellow
         case .running: return .green
         case .crashed: return .red
         }
+    }
+}
+
+private struct StatusDot: View {
+    var phase: RunnerPhase
+    var body: some View {
+        Circle().fill(phase.tint).frame(width: 8, height: 8)
     }
 }
 
@@ -355,8 +484,8 @@ private struct LogsView: View {
             }
             HStack {
                 TextField("Cerca", text: $query).textFieldStyle(.roundedBorder)
-                Button("Clear") { model.session.clearLog(runnerID: runnerID) }
-                Button("Copy") { copy(lines) }
+                Button("Svuota") { model.session.clearLog(runnerID: runnerID) }
+                Button("Copia") { copy(lines) }
             }
             .buttonStyle(.borderless)
             ScrollViewReader { proxy in
@@ -489,6 +618,7 @@ private struct AddProjectSheet: View {
     private func importSelected() {
         let chosen = found.filter { selected.contains($0.id) }
         model.session.addProject(Project(name: resolvedName(), rootPath: folder, runners: chosen))
+        PopoverNotices.shared.show("Progetto aggiunto")
         onClose()
     }
 
@@ -496,6 +626,7 @@ private struct AddProjectSheet: View {
         let title = resolvedName()
         let runner = RunnerConfig(name: title, command: "", workingDirectory: folder, debugPort: 5005)
         model.session.addProject(Project(name: title, rootPath: folder, runners: [runner]))
+        PopoverNotices.shared.show("Progetto aggiunto")
         onClose()
     }
 }
