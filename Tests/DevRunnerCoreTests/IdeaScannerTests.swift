@@ -239,7 +239,7 @@ final class IdeaScannerTests: XCTestCase {
         XCTAssertNil(boot.importNote)
     }
 
-    func testDotRunImportsFlaskAndGunicornNotVSCode() throws {
+    func testDotRunImportsFlaskGunicornAndVSCodeLaunch() throws {
         let project = root.appendingPathComponent("import-service")
         let home = root.appendingPathComponent("home")
         let python = home.appendingPathComponent("venv/bin/python").path
@@ -315,7 +315,15 @@ final class IdeaScannerTests: XCTestCase {
             jdkTableFiles: [root.appendingPathComponent("jdk.table.xml")]
         ))
 
-        XCTAssertEqual(result.runners.map(\.name).sorted(), ["aggiorna dipendenze", "import-service-dev", "import-service-prod"])
+        XCTAssertEqual(result.runners.map(\.name).sorted(), [
+            "aggiorna dipendenze", "import-service-dev", "import-service-flask-debug", "import-service-prod"
+        ])
+        let vscode = try XCTUnwrap(result.runners.first { $0.name == "import-service-flask-debug" })
+        XCTAssertEqual(vscode.idea?.adapter, .vscode)
+        XCTAssertEqual(vscode.idea?.configurationType, "vscode.launch")
+        XCTAssertEqual(vscode.command, "python3 -m flask")
+        XCTAssertEqual(vscode.workingDirectory, project.path)
+        XCTAssertNil(vscode.importNote)
         let flask = try XCTUnwrap(result.runners.first { $0.name == "import-service-dev" })
         XCTAssertEqual(flask.command, "\(python) -m flask run")
         XCTAssertEqual(flask.env["FLASK_APP"], project.appendingPathComponent("app.py").path)

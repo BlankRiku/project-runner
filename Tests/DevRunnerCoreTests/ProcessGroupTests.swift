@@ -1,7 +1,12 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import XCTest
 @testable import DevRunnerCore
 
+#if os(macOS)
 final class ProcessGroupTests: XCTestCase {
     func testBackgroundSleepDiesWithItsGroup() throws {
         let spawner = DarwinProcessSpawner()
@@ -13,7 +18,7 @@ final class ProcessGroupTests: XCTestCase {
             shellArguments: ["-f", "-c"]
         ))
         defer {
-            Darwin.kill(-handle.pid, SIGKILL)
+            kill(-handle.pid, SIGKILL)
             var status: Int32 = 0
             waitpid(handle.pid, &status, WNOHANG)
         }
@@ -33,7 +38,7 @@ final class ProcessGroupTests: XCTestCase {
         let deadline = Date().addingTimeInterval(2)
         var dead = false
         while Date() < deadline {
-            if Darwin.kill(sleep, 0) != 0 && !handle.groupAlive() {
+            if kill(sleep, 0) != 0 && !handle.groupAlive() {
                 dead = true
                 break
             }
@@ -52,7 +57,7 @@ final class ProcessGroupTests: XCTestCase {
             shellArguments: ["-f", "-c"]
         ))
         defer {
-            Darwin.kill(-handle.pid, SIGKILL)
+            kill(-handle.pid, SIGKILL)
             var status: Int32 = 0
             waitpid(handle.pid, &status, WNOHANG)
         }
@@ -95,3 +100,4 @@ final class TextBox: @unchecked Sendable {
         lock.unlock()
     }
 }
+#endif

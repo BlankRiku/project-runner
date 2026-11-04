@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 struct LsofCommand: Equatable, Sendable {
@@ -57,7 +61,7 @@ package struct PortTool: Sendable {
                 }
             },
             signal: { pid, sig in
-                _ = Darwin.kill(pid, sig)
+                _ = kill(pid, sig)
             }
         )
     }

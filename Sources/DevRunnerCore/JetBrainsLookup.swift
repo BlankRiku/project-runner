@@ -1,4 +1,7 @@
 import Foundation
+#if !canImport(Darwin) && canImport(FoundationXML)
+import FoundationXML
+#endif
 
 enum JetBrainsLookup {
     static func catalinaHome(serverName: String, files: [URL], projectRoot: URL, userHome: URL) -> String? {

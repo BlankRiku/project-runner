@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 package struct SpawnRequest: Equatable, Sendable {
@@ -39,6 +43,7 @@ enum SpawnError: Error, Equatable, CustomStringConvertible {
     }
 }
 
+#if os(macOS)
 package struct DarwinProcessSpawner: ProcessSpawning {
     package init() {}
 
@@ -236,3 +241,4 @@ final class DarwinProcessHandle: SpawnedHandle, @unchecked Sendable {
         return 128 + (status & 0x7f)
     }
 }
+#endif

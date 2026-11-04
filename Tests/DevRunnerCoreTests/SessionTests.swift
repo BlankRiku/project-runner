@@ -1,4 +1,8 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import XCTest
 @testable import DevRunnerCore
 
@@ -31,7 +35,7 @@ final class SessionTests: XCTestCase {
         TestSupport.remove(directory)
     }
 
-    func testEmptyCommandDoesNotSpawn() {
+    func testEmptyCommandDoesNotSpawn() async {
         let project = add(command: "   ", port: nil)
         session.start(projectID: project.id, runnerID: project.runners[0].id)
         XCTAssertTrue(spawner.requests.isEmpty)
@@ -39,7 +43,7 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(session.logs(for: project.runners[0].id).lines, ["Comando da completare."])
     }
 
-    func testBusyPortDoesNotSpawnOrSignal() {
+    func testBusyPortDoesNotSpawnOrSignal() async {
         signals.output = "42\n"
         let project = add(command: "echo hi", port: 8080)
         let failure = session.start(projectID: project.id, runnerID: project.runners[0].id)
@@ -77,7 +81,7 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(session.runtime(for: runnerID).phase, .running)
     }
 
-    func testTomcatPrepareFailureDoesNotSpawn() {
+    func testTomcatPrepareFailureDoesNotSpawn() async {
         let runner = RunnerConfig(
             name: "Tomcat",
             command: "exec \"$CATALINA_HOME\"/bin/catalina.sh run",

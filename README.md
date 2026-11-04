@@ -1,12 +1,12 @@
 # Dev Runner
 
-App per la barra dei menu di macOS che avvia, ferma e riavvia i progetti locali usando le run configuration di IntelliJ e PyCharm. Non legge le configurazioni di Visual Studio Code.
+App per la barra dei menu di macOS che avvia, ferma e riavvia i progetti locali usando le run configuration di IntelliJ, PyCharm e Visual Studio Code.
 
 La configurazione resta in `~/.config/dev-runner/config.json`.
 
 ## Configurazioni importate
 
-Lo scanner legge `.idea/runConfigurations`, `.idea/workspace.xml` e `.run/*.run.xml`.
+Lo scanner legge `.idea/runConfigurations`, `.idea/workspace.xml`, `.run/*.run.xml`, `.vscode/launch.json` e `.vscode/tasks.json`. I file di Visual Studio Code sono JSONC: commenti e virgole finali sono accettati. Le configurazioni finiscono nello stesso elenco dei runner di IntelliJ.
 
 | Origine | Comando |
 | --- | --- |
@@ -17,8 +17,11 @@ Lo scanner legge `.idea/runConfigurations`, `.idea/workspace.xml` e `.run/*.run.
 | Gunicorn | `python -m gunicorn` con i parametri della run Python |
 | Maven | i goal della run. Il binario è quello impostato in IntelliJ: wrapper, Maven incluso nell’IDE o percorso custom |
 | Spring Boot senza goal | `spring-boot:run` se nella radice c’è `pom.xml`, con la main class e il JDK di progetto |
+| VS Code launch | comando ricostruito da `runtimeExecutable`, `program`, `module` o `args`. `request: attach` e una main class Java senza classpath restano senza comando, con una nota |
+| VS Code compound | un runner che avvia in parallelo le launch referenziate |
+| VS Code task | `shell` e `process` usano `command` e `args`; `npm` usa `npm run <script>`. `dependsOn` entra nel comando |
 
-L’interprete Python si risolve dal nome SDK in `jdk.table.xml`. Le variabili della run e il file indicato da `ENV_FILES` entrano nell’ambiente del runner. I task prima dell’avvio non vengono eseguiti.
+L’interprete Python si risolve dal nome SDK in `jdk.table.xml`. Le variabili della run e il file indicato da `ENV_FILES` (o da `envFile` in VS Code) entrano nell’ambiente del runner. I task prima dell’avvio di IntelliJ non vengono eseguiti. Un `preLaunchTask` di VS Code, se esiste in `tasks.json`, viene messo davanti al comando con `&&`. Si espandono solo `${workspaceFolder}`, `${workspaceRoot}`, `${workspaceFolderBasename}` e `${userHome}`.
 
 Una configurazione non riconosciuta compare con il comando vuoto e una nota. Si può completare a mano: un comando modificato non viene sovrascritto da **Sincronizza**.
 
@@ -29,7 +32,7 @@ L’icona sta nella barra dei menu, non nel Dock.
 1. Aggiungi la cartella del progetto. Per un microservizio usa la sua cartella, non la root del repository: i file `.run` stanno lì.
 2. Scegli le run da importare.
 3. Avvia, ferma o riavvia il runner. I log si aprono dal pannello.
-4. **Sincronizza** rilegge le run di IntelliJ. **Libera porta** chiude chi occupa la porta controllata dal runner.
+4. **Sincronizza** rilegge le run di IntelliJ e di Visual Studio Code. **Libera porta** chiude chi occupa la porta controllata dal runner.
 
 ## Sviluppo
 

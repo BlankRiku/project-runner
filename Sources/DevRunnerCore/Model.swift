@@ -6,6 +6,7 @@ package enum IdeaAdapter: String, Codable, Equatable, Sendable {
     case python
     case maven
     case unmapped
+    case vscode
 }
 
 package enum DebugInjection: String, Codable, Equatable, Sendable {

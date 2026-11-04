@@ -1,4 +1,7 @@
 import Foundation
+#if !canImport(Darwin) && canImport(FoundationXML)
+import FoundationXML
+#endif
 
 package struct IdeaScanRequest: Sendable {
     package var projectRoot: URL
@@ -46,6 +49,14 @@ package enum IdeaScanner {
         if FileManager.default.fileExists(atPath: workspace.path) {
             ingest(file: workspace, request: request, servers: servers, jdks: jdks, runners: &runners, skipped: &skipped, seen: &seen)
         }
+        let vscode = VSCodeScanner.scan(projectRoot: request.projectRoot, userHome: request.userHome)
+        for runner in vscode.runners {
+            let key = runner.name + "\u{0}" + (runner.idea?.configurationType ?? "")
+            if seen.contains(key) { continue }
+            seen.insert(key)
+            runners.append(runner)
+        }
+        skipped.append(contentsOf: vscode.skippedFiles)
         return IdeaScanResult(runners: runners, skippedFiles: skipped)
     }
 
@@ -76,6 +87,10 @@ package enum IdeaScanner {
         skipped: inout [String],
         seen: inout Set<String>
     ) {
+        guard isWellFormed(file) else {
+            skipped.append(file.lastPathComponent)
+            return
+        }
         let document: XMLDocument
         do {
             document = try XMLDocument(contentsOf: file, options: [.nodePreserveWhitespace])
@@ -623,7 +638,7 @@ package enum IdeaScanner {
                 userHome: request.userHome
             )
             guard !expanded.isEmpty else { continue }
-            for (key, value) in envFile(at: URL(fileURLWithPath: expanded)) {
+            for (key, value) in DotEnv.parse(at: URL(fileURLWithPath: expanded)) {
                 result[key] = value
             }
         }
@@ -635,32 +650,6 @@ package enum IdeaScanner {
             }
         }
         return result
-    }
-
-    private static func envFile(at url: URL) -> [String: String] {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
-        var result: [String: String] = [:]
-        for raw in text.components(separatedBy: .newlines) {
-            var line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.isEmpty || line.hasPrefix("#") { continue }
-            if line.hasPrefix("export ") {
-                line = String(line.dropFirst("export ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            guard let separator = line.firstIndex(of: "=") else { continue }
-            let key = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
-            result[key] = stripMatchingQuotes(value)
-        }
-        return result
-    }
-
-    private static func stripMatchingQuotes(_ value: String) -> String {
-        guard value.count >= 2, let first = value.first, let last = value.last else { return value }
-        if (first == "\"" && last == "\"") || (first == "'" && last == "'") {
-            return String(value.dropFirst().dropLast())
-        }
-        return value
     }
 
     private static func explicitJdwpPort(_ element: XMLElement) -> Int? {
@@ -736,5 +725,23 @@ package enum IdeaScanner {
             return "'\(character)'"
         }
         return "concat(\(parts.joined(separator: ",")))"
+    }
+
+    private static func isWellFormed(_ url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url) else { return false }
+        let parser = XMLParser(data: data)
+        let delegate = WellFormedXML()
+        parser.delegate = delegate
+        parser.shouldResolveExternalEntities = false
+        _ = parser.parse()
+        return !delegate.failed
+    }
+}
+
+private final class WellFormedXML: NSObject, XMLParserDelegate {
+    var failed = false
+
+    func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
+        failed = true
     }
 }

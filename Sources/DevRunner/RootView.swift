@@ -194,7 +194,7 @@ private struct ProjectBlock: View {
                 WordButton(title: "Terminale", systemImage: "terminal", help: "Apri la cartella nel Terminale") {
                     openTerminal(project.rootPath)
                 }
-                WordButton(title: "Sincronizza", systemImage: "arrow.triangle.2.circlepath", help: "Sincronizza le run configuration di IntelliJ") {
+                WordButton(title: "Sincronizza", systemImage: "arrow.triangle.2.circlepath", help: "Sincronizza le run configuration di IntelliJ e Visual Studio Code") {
                     model.session.resync(projectID: project.id)
                 }
                 Spacer(minLength: 8)
@@ -569,9 +569,9 @@ private struct AddProjectSheet: View {
                 TextField("Cartella", text: $folder)
                 Button("Sfoglia") { browse() }
             }
-            Text("Run configuration di IntelliJ").font(.subheadline)
+            Text("Run configuration di IntelliJ e Visual Studio Code").font(.subheadline)
             if scanned && found.isEmpty {
-                Text("Nessuna run configuration di IntelliJ").foregroundStyle(Theme.secondary)
+                Text("Nessuna run configuration di IntelliJ o Visual Studio Code").foregroundStyle(Theme.secondary)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
