@@ -122,6 +122,152 @@ final class IdeaScannerTests: XCTestCase {
         XCTAssertEqual(result.runners.first { $0.name == "Spring" }?.idea?.adapter, .unmapped)
     }
 
+    func testDotRunImportsFlaskAndGunicornNotVSCode() throws {
+        let project = root.appendingPathComponent("import-service")
+        let home = root.appendingPathComponent("home")
+        let python = home.appendingPathComponent("venv/bin/python").path
+        try TestSupport.write("""
+        # commento
+        export LOG_LEVEL=DEBUG
+        SERVICE_PORT=5002
+        QUOTED="a b"
+        FLASK_RUN_PORT=1111
+        """, to: project.appendingPathComponent(".env"))
+        try TestSupport.write("""
+        SERVICE_PORT=5002
+        """, to: project.appendingPathComponent(".env.gunicorn"))
+        try TestSupport.write("""
+        <application><component name="ProjectJdkTable"><jdk version="2">
+          <name value="Python 3.12 (import-service)" />
+          <homePath value="$USER_HOME$/venv/bin/python" />
+        </jdk></component></application>
+        """, to: root.appendingPathComponent("jdk.table.xml"))
+        try TestSupport.write("""
+        <component name="ProjectRunConfigurationManager">
+          <configuration default="false" name="import-service-dev" type="Python.FlaskServer">
+            <option name="target" value="$PROJECT_DIR$/app.py" />
+            <option name="targetType" value="PATH" />
+            <option name="ENV_FILES" value="$PROJECT_DIR$/.env" />
+            <envs>
+              <env name="FLASK_RUN_PORT" value="5002" />
+            </envs>
+            <option name="SDK_HOME" value="" />
+            <option name="SDK_NAME" value="Python 3.12 (import-service)" />
+            <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+            <method v="2">
+              <option name="RunConfigurationTask" enabled="true" run_configuration_name="aggiorna dipendenze" run_configuration_type="ShConfigurationType" />
+            </method>
+          </configuration>
+        </component>
+        """, to: project.appendingPathComponent(".run/import-service-dev.run.xml"))
+        try TestSupport.write("""
+        <component name="ProjectRunConfigurationManager">
+          <configuration default="false" name="import-service-prod" type="PythonConfigurationType" factoryName="Python">
+            <option name="ENV_FILES" value="$PROJECT_DIR$/.env.gunicorn" />
+            <option name="SDK_HOME" value="" />
+            <option name="SDK_NAME" value="Python 3.12 (import-service)" />
+            <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+            <option name="SCRIPT_NAME" value="gunicorn" />
+            <option name="PARAMETERS" value="-c gunicorn_config.py wsgi:app" />
+            <option name="MODULE_MODE" value="true" />
+            <envs>
+              <env name="PYTHONUNBUFFERED" value="1" />
+            </envs>
+          </configuration>
+        </component>
+        """, to: project.appendingPathComponent(".run/import-service-prod.run.xml"))
+        try TestSupport.write("""
+        <component name="ProjectRunConfigurationManager">
+          <configuration default="false" name="aggiorna dipendenze" type="ShConfigurationType">
+            <option name="SCRIPT_TEXT" value="pip-sync requirements.txt" />
+            <option name="INTERPRETER_PATH" value="/bin/zsh" />
+            <option name="SCRIPT_WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+          </configuration>
+        </component>
+        """, to: project.appendingPathComponent(".run/aggiorna dipendenze.run.xml"))
+        try TestSupport.write("""
+        {"configurations":[{"name":"import-service-flask-debug","module":"flask"}]}
+        """, to: project.appendingPathComponent(".vscode/launch.json"))
+        try TestSupport.write("bind = \"127.0.0.1:5002\"\n", to: project.appendingPathComponent("gunicorn_config.py"))
+
+        let result = IdeaScanner.scan(IdeaScanRequest(
+            projectRoot: project,
+            configRoot: root.appendingPathComponent("config"),
+            userHome: home,
+            applicationServersFiles: [],
+            jdkTableFiles: [root.appendingPathComponent("jdk.table.xml")]
+        ))
+
+        XCTAssertEqual(result.runners.map(\.name).sorted(), ["aggiorna dipendenze", "import-service-dev", "import-service-prod"])
+        let flask = try XCTUnwrap(result.runners.first { $0.name == "import-service-dev" })
+        XCTAssertEqual(flask.command, "\(python) -m flask run")
+        XCTAssertEqual(flask.env["FLASK_APP"], project.appendingPathComponent("app.py").path)
+        XCTAssertEqual(flask.env["LOG_LEVEL"], "DEBUG")
+        XCTAssertEqual(flask.env["QUOTED"], "a b")
+        XCTAssertEqual(flask.env["SERVICE_PORT"], "5002")
+        XCTAssertEqual(flask.env["FLASK_RUN_PORT"], "5002")
+        XCTAssertEqual(flask.portToCheck, 5002)
+        XCTAssertEqual(flask.workingDirectory, project.path)
+        XCTAssertEqual(flask.idea?.adapter, .python)
+        XCTAssertEqual(flask.idea?.configurationType, "Python.FlaskServer")
+        XCTAssertNil(flask.importNote)
+
+        let gunicorn = try XCTUnwrap(result.runners.first { $0.name == "import-service-prod" })
+        XCTAssertEqual(gunicorn.command, "\(python) -m gunicorn -c gunicorn_config.py wsgi:app")
+        XCTAssertEqual(gunicorn.env["SERVICE_PORT"], "5002")
+        XCTAssertEqual(gunicorn.env["PYTHONUNBUFFERED"], "1")
+        XCTAssertNil(gunicorn.portToCheck)
+        XCTAssertEqual(gunicorn.idea?.configurationType, "PythonConfigurationType")
+        XCTAssertNil(gunicorn.importNote)
+
+        let shell = try XCTUnwrap(result.runners.first { $0.name == "aggiorna dipendenze" })
+        XCTAssertEqual(shell.command, "")
+        XCTAssertEqual(shell.idea?.adapter, .unmapped)
+        XCTAssertEqual(shell.importNote, "Tipo di configurazione non mappato.")
+    }
+
+    func testFlaskDefaultPortAndUnresolvedInterpreter() throws {
+        let project = root.appendingPathComponent("service")
+        try TestSupport.write("""
+        <component name="ProjectRunConfigurationManager">
+          <configuration name="flask-dev" type="Python.FlaskServer">
+            <option name="target" value="$PROJECT_DIR$/app.py" />
+            <option name="SDK_HOME" value="/usr/bin/python3" />
+            <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+          </configuration>
+        </component>
+        """, to: project.appendingPathComponent(".idea/runConfigurations/flask.xml"))
+        try TestSupport.write("""
+        <component name="ProjectRunConfigurationManager">
+          <configuration name="flask-missing" type="Python.FlaskServer">
+            <option name="target" value="$PROJECT_DIR$/app.py" />
+            <option name="SDK_HOME" value="" />
+            <option name="SDK_NAME" value="Python assente" />
+            <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+          </configuration>
+        </component>
+        """, to: project.appendingPathComponent(".run/flask-missing.run.xml"))
+
+        let result = IdeaScanner.scan(IdeaScanRequest(
+            projectRoot: project,
+            configRoot: root.appendingPathComponent("config"),
+            userHome: root,
+            applicationServersFiles: [],
+            jdkTableFiles: []
+        ))
+        let flask = try XCTUnwrap(result.runners.first { $0.name == "flask-dev" })
+        XCTAssertEqual(flask.command, "/usr/bin/python3 -m flask run")
+        XCTAssertEqual(flask.portToCheck, 5000)
+        XCTAssertNil(flask.env["FLASK_RUN_PORT"])
+        XCTAssertEqual(flask.env["FLASK_APP"], project.appendingPathComponent("app.py").path)
+
+        let missing = try XCTUnwrap(result.runners.first { $0.name == "flask-missing" })
+        XCTAssertEqual(missing.command, "")
+        XCTAssertEqual(missing.importNote, "Interprete «Python assente» non trovato in jdk.table.xml.")
+        XCTAssertEqual(missing.portToCheck, 5000)
+        XCTAssertEqual(missing.env["FLASK_APP"], project.appendingPathComponent("app.py").path)
+    }
+
     private struct Layout {
         var root: URL
         var config: URL

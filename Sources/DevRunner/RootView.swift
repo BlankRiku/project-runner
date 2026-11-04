@@ -25,10 +25,26 @@ struct RootView: View {
                 projectList
             }
         }
-        .frame(width: 400)
+        // Fixed panel size so lista ↔ log does not resize (and shift) the MenuBarExtra window.
+        .frame(width: Self.panelWidth, height: Self.panelHeight, alignment: .top)
         .background(Theme.background)
-        .fitMenuBarPanel(width: 400)
+        .fitMenuBarPanel(
+            width: Self.panelWidth,
+            maxHeight: Self.panelHeight,
+            placementToken: panelPlacementToken
+        )
         .preferredColorScheme(.dark)
+    }
+
+    private static let panelWidth: CGFloat = 400
+    private static let panelHeight: CGFloat = 560
+
+    private var panelPlacementToken: Int {
+        var hasher = Hasher()
+        hasher.combine(logsRunnerID)
+        hasher.combine(notices.confirm?.id)
+        hasher.combine(notices.current?.id)
+        return hasher.finalize()
     }
 
     private var activeSummary: String {
@@ -59,59 +75,68 @@ struct RootView: View {
                 .foregroundStyle(model.activeCount > 0 ? Color.green : Theme.secondary)
             }
             .foregroundStyle(Theme.text)
-            if let confirm = notices.confirm {
-                PopoverConfirmCard(
-                    prompt: confirm,
-                    onCancel: { notices.cancelConfirm() },
-                    onConfirm: { notices.performConfirm() }
-                )
-            } else if let notice = notices.current {
-                PopoverBanner(notice: notice) {
-                    notices.dismiss(notice.id)
-                }
-            }
             Divider().overlay(Theme.line)
-            // A ScrollView's ideal height inside MenuBarExtra is about zero, so the rows never appear.
-            MenuBarColumn(maxHeight: 440) {
+            // Notices overlay the body so the MenuBarExtra panel height (and Y) stay put.
+            ZStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 12) {
-                    if model.projects.isEmpty {
-                        Text("Nessun progetto").foregroundStyle(Theme.secondary)
+                    // A ScrollView's ideal height inside MenuBarExtra is about zero, so the rows never appear.
+                    MenuBarColumn(maxHeight: 400) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            if model.projects.isEmpty {
+                                Text("Nessun progetto").foregroundStyle(Theme.secondary)
+                            }
+                            ForEach(model.projects) { project in
+                                ProjectBlock(project: project, onLogs: { logsRunnerID = $0 }, onEdit: { edit($0) })
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    ForEach(model.projects) { project in
-                        ProjectBlock(project: project, onLogs: { logsRunnerID = $0 }, onEdit: { edit($0) })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    Divider().overlay(Theme.line)
+                    HStack {
+                        Button(action: addProject) {
+                            Label("Aggiungi Progetto", systemImage: "plus")
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                        Button(action: { model.session.stopAll() }) {
+                            Label("Termina Tutti", systemImage: "stop.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .disabled(model.activeCount == 0)
                     }
+                    .font(.caption.weight(.semibold))
+                    HStack {
+                        Button(action: openConfig) {
+                            Label("Apri config.json", systemImage: "doc.text")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.blue)
+                        Spacer()
+                        Button(action: { NSApplication.shared.terminate(nil) }) {
+                            Label("Esci", systemImage: "power")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.secondary)
+                    }
+                    .font(.caption)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                if let confirm = notices.confirm {
+                    PopoverConfirmCard(
+                        prompt: confirm,
+                        onCancel: { notices.cancelConfirm() },
+                        onConfirm: { notices.performConfirm() }
+                    )
+                    .background(Theme.background)
+                } else if let notice = notices.current {
+                    PopoverBanner(notice: notice) {
+                        notices.dismiss(notice.id)
+                    }
+                    .background(Theme.background)
+                }
             }
-            Divider().overlay(Theme.line)
-            HStack {
-                Button(action: addProject) {
-                    Label("Aggiungi Progetto", systemImage: "plus")
-                }
-                .buttonStyle(.plain)
-                Spacer()
-                Button(action: { model.session.stopAll() }) {
-                    Label("Termina Tutti", systemImage: "stop.fill")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.red)
-                .disabled(model.activeCount == 0)
-            }
-            .font(.caption.weight(.semibold))
-            HStack {
-                Button(action: openConfig) {
-                    Label("Apri config.json", systemImage: "doc.text")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.blue)
-                Spacer()
-                Button(action: { NSApplication.shared.terminate(nil) }) {
-                    Label("Esci", systemImage: "power")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.secondary)
-            }
-            .font(.caption)
         }
         .padding(12)
         .foregroundStyle(Theme.text)
@@ -169,7 +194,7 @@ private struct ProjectBlock: View {
                 WordButton(title: "Terminale", systemImage: "terminal", help: "Apri la cartella nel Terminale") {
                     openTerminal(project.rootPath)
                 }
-                WordButton(title: "Sincronizza", systemImage: "arrow.triangle.2.circlepath", help: "Sincronizza da .idea") {
+                WordButton(title: "Sincronizza", systemImage: "arrow.triangle.2.circlepath", help: "Sincronizza le run configuration di IntelliJ") {
                     model.session.resync(projectID: project.id)
                 }
                 Spacer(minLength: 8)
@@ -504,7 +529,7 @@ private struct LogsView: View {
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(minHeight: 280, maxHeight: 460)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(white: 0.05))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .onAppear { scroll(proxy, lines: lines) }
@@ -512,6 +537,7 @@ private struct LogsView: View {
             }
         }
         .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .foregroundStyle(Theme.text)
     }
 
@@ -543,9 +569,9 @@ private struct AddProjectSheet: View {
                 TextField("Cartella", text: $folder)
                 Button("Sfoglia") { browse() }
             }
-            Text("Trovate in .idea").font(.subheadline)
+            Text("Run configuration di IntelliJ").font(.subheadline)
             if scanned && found.isEmpty {
-                Text("Nessuna configurazione in .idea").foregroundStyle(Theme.secondary)
+                Text("Nessuna run configuration di IntelliJ").foregroundStyle(Theme.secondary)
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {

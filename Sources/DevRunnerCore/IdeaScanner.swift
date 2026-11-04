@@ -34,20 +34,37 @@ package enum IdeaScanner {
         var runners: [RunnerConfig] = []
         var skipped: [String] = []
         var seen: Set<String> = []
-        let runConfigDir = request.projectRoot.appendingPathComponent(".idea/runConfigurations", isDirectory: true)
-        if let files = try? FileManager.default.contentsOfDirectory(at: runConfigDir, includingPropertiesForKeys: nil) {
-            let xmls = files
-                .filter { $0.pathExtension.lowercased() == "xml" }
-                .sorted { $0.lastPathComponent < $1.lastPathComponent }
-            for file in xmls {
-                ingest(file: file, request: request, servers: servers, jdks: jdks, runners: &runners, skipped: &skipped, seen: &seen)
-            }
-        }
+        ingestDirectory(
+            request.projectRoot.appendingPathComponent(".idea/runConfigurations", isDirectory: true),
+            request: request, servers: servers, jdks: jdks, runners: &runners, skipped: &skipped, seen: &seen
+        )
+        ingestDirectory(
+            request.projectRoot.appendingPathComponent(".run", isDirectory: true),
+            request: request, servers: servers, jdks: jdks, runners: &runners, skipped: &skipped, seen: &seen
+        )
         let workspace = request.projectRoot.appendingPathComponent(".idea/workspace.xml")
         if FileManager.default.fileExists(atPath: workspace.path) {
             ingest(file: workspace, request: request, servers: servers, jdks: jdks, runners: &runners, skipped: &skipped, seen: &seen)
         }
         return IdeaScanResult(runners: runners, skippedFiles: skipped)
+    }
+
+    private static func ingestDirectory(
+        _ directory: URL,
+        request: IdeaScanRequest,
+        servers: [URL],
+        jdks: [URL],
+        runners: inout [RunnerConfig],
+        skipped: inout [String],
+        seen: inout Set<String>
+    ) {
+        guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+        let xmls = files
+            .filter { $0.pathExtension.lowercased() == "xml" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        for file in xmls {
+            ingest(file: file, request: request, servers: servers, jdks: jdks, runners: &runners, skipped: &skipped, seen: &seen)
+        }
     }
 
     private static func ingest(
@@ -94,8 +111,11 @@ package enum IdeaScanner {
         if type.contains("js.build_tools.npm") || factory.caseInsensitiveCompare("npm") == .orderedSame {
             return mapNpm(element: element, name: name, type: type, request: request)
         }
+        if type.contains("FlaskServer") || factory.localizedCaseInsensitiveContains("flask") {
+            return mapFlask(element: element, name: name, type: type, request: request, jdks: jdks)
+        }
         if type.contains("Python") {
-            return mapPython(element: element, name: name, type: type, request: request)
+            return mapPython(element: element, name: name, type: type, request: request, jdks: jdks)
         }
         if type.localizedCaseInsensitiveContains("Maven") {
             if goals(element).isEmpty {
@@ -192,27 +212,101 @@ package enum IdeaScanner {
         )
     }
 
-    private static func mapPython(element: XMLElement, name: String, type: String, request: IdeaScanRequest) -> RunnerConfig {
+    private static func mapFlask(
+        element: XMLElement,
+        name: String,
+        type: String,
+        request: IdeaScanRequest,
+        jdks: [URL]
+    ) -> RunnerConfig {
+        let resolution = resolveInterpreter(element: element, request: request, jdks: jdks)
         let command: String
-        if let shell = firstText(option(element, "SCRIPT_TEXT"), option(element, "COMMAND")) {
-            command = MacroExpander.expand(shell, projectRoot: request.projectRoot, userHome: request.userHome)
-        } else {
-            let sdk = (option(element, "SDK_HOME") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let interpreter = sdk.isEmpty ? "python3" : MacroExpander.expand(sdk, projectRoot: request.projectRoot, userHome: request.userHome)
-            let script = MacroExpander.expand(option(element, "SCRIPT_NAME") ?? "", projectRoot: request.projectRoot, userHome: request.userHome)
-            let module = option(element, "MODULE_MODE") == "true"
-            if module {
-                command = "\(ShellWords.quote(interpreter)) -m \(ShellWords.quote(script))"
-            } else {
-                command = "\(ShellWords.quote(interpreter)) \(ShellWords.quote(script))"
-            }
-            let params = (option(element, "PARAMETERS") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if params.isEmpty {
-                return plain(element: element, name: name, type: type, request: request, command: command, workingDirectory: workingDirectory(element, request: request), adapter: .python, injection: .none, note: nil)
-            }
-            return plain(element: element, name: name, type: type, request: request, command: command + " " + params, workingDirectory: workingDirectory(element, request: request), adapter: .python, injection: .none, note: nil)
+        let note: String?
+        switch resolution {
+        case .command(let interpreter):
+            command = "\(ShellWords.quote(interpreter)) -m flask run"
+            note = nil
+        case .missing(let message):
+            command = ""
+            note = message
         }
-        return plain(element: element, name: name, type: type, request: request, command: command, workingDirectory: workingDirectory(element, request: request), adapter: .python, injection: .none, note: nil)
+        var runner = plain(
+            element: element, name: name, type: type, request: request,
+            command: command, workingDirectory: workingDirectory(element, request: request),
+            adapter: .python, injection: .none, note: note
+        )
+        let target = MacroExpander.expand(
+            (option(element, "target") ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            projectRoot: request.projectRoot,
+            userHome: request.userHome
+        )
+        if !target.isEmpty {
+            runner.env["FLASK_APP"] = target
+        }
+        runner.portToCheck = flaskPort(runner.env["FLASK_RUN_PORT"])
+        return runner
+    }
+
+    private static func mapPython(
+        element: XMLElement,
+        name: String,
+        type: String,
+        request: IdeaScanRequest,
+        jdks: [URL]
+    ) -> RunnerConfig {
+        let work = workingDirectory(element, request: request)
+        if let shell = firstText(option(element, "SCRIPT_TEXT"), option(element, "COMMAND")) {
+            let command = MacroExpander.expand(shell, projectRoot: request.projectRoot, userHome: request.userHome)
+            return plain(
+                element: element, name: name, type: type, request: request,
+                command: command, workingDirectory: work, adapter: .python, injection: .none, note: nil
+            )
+        }
+        let interpreter: String
+        switch resolveInterpreter(element: element, request: request, jdks: jdks) {
+        case .command(let value):
+            interpreter = value
+        case .missing(let message):
+            return plain(
+                element: element, name: name, type: type, request: request,
+                command: "", workingDirectory: work, adapter: .python, injection: .none, note: message
+            )
+        }
+        let script = MacroExpander.expand(option(element, "SCRIPT_NAME") ?? "", projectRoot: request.projectRoot, userHome: request.userHome)
+        let module = option(element, "MODULE_MODE") == "true"
+        var command = module
+            ? "\(ShellWords.quote(interpreter)) -m \(ShellWords.quote(script))"
+            : "\(ShellWords.quote(interpreter)) \(ShellWords.quote(script))"
+        let params = (option(element, "PARAMETERS") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !params.isEmpty { command += " " + params }
+        return plain(
+            element: element, name: name, type: type, request: request,
+            command: command, workingDirectory: work, adapter: .python, injection: .none, note: nil
+        )
+    }
+
+    private enum InterpreterResolution {
+        case command(String)
+        case missing(String)
+    }
+
+    private static func resolveInterpreter(element: XMLElement, request: IdeaScanRequest, jdks: [URL]) -> InterpreterResolution {
+        let sdkHome = (option(element, "SDK_HOME") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sdkHome.isEmpty {
+            return .command(MacroExpander.expand(sdkHome, projectRoot: request.projectRoot, userHome: request.userHome))
+        }
+        let sdkName = (option(element, "SDK_NAME") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if sdkName.isEmpty { return .command("python3") }
+        if let home = JetBrainsLookup.jdkHome(name: sdkName, files: jdks, projectRoot: request.projectRoot, userHome: request.userHome) {
+            return .command(home)
+        }
+        return .missing("Interprete «\(sdkName)» non trovato in jdk.table.xml.")
+    }
+
+    private static func flaskPort(_ raw: String?) -> Int {
+        let text = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let port = Int(text), (1...65535).contains(port) { return port }
+        return 5000
     }
 
     private static func mapMaven(element: XMLElement, name: String, type: String, request: IdeaScanRequest) -> RunnerConfig {
@@ -336,13 +430,52 @@ package enum IdeaScanner {
 
     private static func environment(_ element: XMLElement, request: IdeaScanRequest) -> [String: String] {
         var result: [String: String] = [:]
-        guard let nodes = try? element.nodes(forXPath: ".//envs/env") else { return result }
-        for case let node as XMLElement in nodes {
-            guard let name = node.attribute(forName: "name")?.stringValue else { continue }
-            let value = node.attribute(forName: "value")?.stringValue ?? ""
-            result[name] = MacroExpander.expand(value, projectRoot: request.projectRoot, userHome: request.userHome)
+        let files = (option(element, "ENV_FILES") ?? "").split(separator: ";", omittingEmptySubsequences: true)
+        for file in files {
+            let expanded = MacroExpander.expand(
+                file.trimmingCharacters(in: .whitespacesAndNewlines),
+                projectRoot: request.projectRoot,
+                userHome: request.userHome
+            )
+            guard !expanded.isEmpty else { continue }
+            for (key, value) in envFile(at: URL(fileURLWithPath: expanded)) {
+                result[key] = value
+            }
+        }
+        if let nodes = try? element.nodes(forXPath: ".//envs/env") {
+            for case let node as XMLElement in nodes {
+                guard let name = node.attribute(forName: "name")?.stringValue else { continue }
+                let value = node.attribute(forName: "value")?.stringValue ?? ""
+                result[name] = MacroExpander.expand(value, projectRoot: request.projectRoot, userHome: request.userHome)
+            }
         }
         return result
+    }
+
+    private static func envFile(at url: URL) -> [String: String] {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
+        var result: [String: String] = [:]
+        for raw in text.components(separatedBy: .newlines) {
+            var line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            if line.hasPrefix("export ") {
+                line = String(line.dropFirst("export ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            guard let separator = line.firstIndex(of: "=") else { continue }
+            let key = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { continue }
+            let value = line[line.index(after: separator)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            result[key] = stripMatchingQuotes(value)
+        }
+        return result
+    }
+
+    private static func stripMatchingQuotes(_ value: String) -> String {
+        guard value.count >= 2, let first = value.first, let last = value.last else { return value }
+        if (first == "\"" && last == "\"") || (first == "'" && last == "'") {
+            return String(value.dropFirst().dropLast())
+        }
+        return value
     }
 
     private static func explicitJdwpPort(_ element: XMLElement) -> Int? {
