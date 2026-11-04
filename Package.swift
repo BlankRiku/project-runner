@@ -12,7 +12,11 @@ let package = Package(
     ],
     targets: [
         .target(name: "DevRunnerCore"),
-        .executableTarget(name: "DevRunner", dependencies: ["DevRunnerCore"]),
+        .executableTarget(
+            name: "DevRunner",
+            dependencies: ["DevRunnerCore"],
+            resources: [.process("Resources")]
+        ),
         .testTarget(name: "DevRunnerCoreTests", dependencies: ["DevRunnerCore"])
     ]
 )

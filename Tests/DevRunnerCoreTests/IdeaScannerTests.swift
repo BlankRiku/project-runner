@@ -60,6 +60,29 @@ final class IdeaScannerTests: XCTestCase {
         XCTAssertEqual(docker.importNote, "Tipo di configurazione non mappato.")
     }
 
+    func testEphemeralRunnerSettingsPortIsNotJdwp() throws {
+        let project = try writeTomcatWorkspace(extra: """
+              <option name="HTTP_PORT" value="8080" />
+              <RunnerSettings RunnerId="Debug">
+                <option name="DEBUG_PORT" value="53894" />
+              </RunnerSettings>
+        """)
+        let tomcat = try scanTomcat(project)
+        XCTAssertEqual(tomcat.debugPort, 5005)
+        XCTAssertEqual(tomcat.portToCheck, 8080)
+    }
+
+    func testJdwpAddressOverridesEphemeralDebugPort() throws {
+        let project = try writeTomcatWorkspace(extra: """
+              <option name="VM_PARAMETERS" value="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5010" />
+              <RunnerSettings RunnerId="Debug">
+                <option name="DEBUG_PORT" value="53894" />
+              </RunnerSettings>
+        """)
+        let tomcat = try scanTomcat(project)
+        XCTAssertEqual(tomcat.debugPort, 5010)
+    }
+
     func testMissingServerYieldsEmptyCommand() throws {
         let layout = try writeFixture()
         let result = IdeaScanner.scan(request(layout, servers: [], jdks: []))
@@ -104,6 +127,31 @@ final class IdeaScannerTests: XCTestCase {
         var config: URL
         var servers: URL
         var jdks: URL
+    }
+
+    private func writeTomcatWorkspace(extra: String) throws -> URL {
+        let project = root.appendingPathComponent("tomcat-project-\(UUID().uuidString)")
+        try TestSupport.write("""
+        <project version="4">
+          <component name="RunManager">
+            <configuration name="Tomcat 9.0.41" type="#com.intellij.j2ee.web.tomcat.TomcatRunConfigurationFactory" factoryName="Local" APPLICATION_SERVER_NAME="Tomcat 9.0.41">
+        \(extra)
+            </configuration>
+          </component>
+        </project>
+        """, to: project.appendingPathComponent(".idea/workspace.xml"))
+        return project
+    }
+
+    private func scanTomcat(_ project: URL) throws -> RunnerConfig {
+        let result = IdeaScanner.scan(IdeaScanRequest(
+            projectRoot: project,
+            configRoot: root.appendingPathComponent("config-root"),
+            userHome: root,
+            applicationServersFiles: [],
+            jdkTableFiles: []
+        ))
+        return try XCTUnwrap(result.runners.first { $0.name == "Tomcat 9.0.41" })
     }
 
     private func request(_ layout: Layout, servers: [URL], jdks: [URL]) -> IdeaScanRequest {

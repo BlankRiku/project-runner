@@ -52,6 +52,33 @@ package final class Session {
         return nil
     }
 
+    package func removeRunner(runnerID: UUID) {
+        stop(runnerID: runnerID)
+        restartAfterStop.remove(runnerID)
+        guard let projectIndex = projects.firstIndex(where: { $0.runners.contains { $0.id == runnerID } }) else { return }
+        projects[projectIndex].runners.removeAll { $0.id == runnerID }
+        if projects[projectIndex].runners.isEmpty {
+            projects.remove(at: projectIndex)
+        }
+        forget(runnerID)
+        indexRunners()
+        persist()
+        changed()
+    }
+
+    package func removeProject(projectID: UUID) {
+        guard let project = projects.first(where: { $0.id == projectID }) else { return }
+        for runner in project.runners {
+            stop(runnerID: runner.id)
+            restartAfterStop.remove(runner.id)
+            forget(runner.id)
+        }
+        projects.removeAll { $0.id == projectID }
+        indexRunners()
+        persist()
+        changed()
+    }
+
     package func addProject(_ project: Project) {
         projects.append(project)
         indexRunners()
@@ -249,6 +276,12 @@ package final class Session {
     private func setRuntime(_ runnerID: UUID, _ runtime: RunnerRuntime) {
         runtimes[runnerID] = runtime
         changed()
+    }
+
+    private func forget(_ runnerID: UUID) {
+        logsStorage[runnerID] = nil
+        runtimes[runnerID] = nil
+        lineBuffers[runnerID] = nil
     }
 
     private func indexRunners() {

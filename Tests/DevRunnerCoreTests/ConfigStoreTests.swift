@@ -58,6 +58,23 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(text, "{")
     }
 
+    func testCePostoShapedDocumentIsNotDropped() throws {
+        let url = root.appendingPathComponent("config.json")
+        try TestSupport.write(cePostoJSON, to: url)
+        var store = ConfigStore(fileURL: url)
+        let projects = store.load()
+        XCTAssertFalse(store.isCorrupt)
+        XCTAssertEqual(projects.map(\.name), ["ceposto"])
+        XCTAssertEqual(projects.first?.rootPath, "/Users/icsone/Desktop/icsone/ceposto/ceposto-java-server")
+        let runner = try XCTUnwrap(projects.first?.runners.first)
+        XCTAssertEqual(runner.id, UUID(uuidString: "2AE60F9B-518D-405A-BEBD-95FB5397B83D"))
+        XCTAssertEqual(runner.name, "Tomcat 9.0.41")
+        XCTAssertEqual(runner.portToCheck, 8080)
+        XCTAssertEqual(runner.workingDirectory, "/Users/icsone/Desktop/icsone/ceposto/ceposto-java-server")
+        XCTAssertEqual(runner.command, "exec \"$CATALINA_HOME\"/bin/catalina.sh run")
+        XCTAssertEqual(runner.idea?.adapter, .tomcat)
+    }
+
     func testPrepareForOpenWritesDefaultOnlyWhenMissing() throws {
         let url = root.appendingPathComponent("config.json")
         let store = ConfigStore(fileURL: url)
@@ -70,3 +87,40 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(untouched, "{")
     }
 }
+
+private let cePostoJSON = #"""
+{
+  "projects" : [
+    {
+      "id" : "9DE1B3A5-0396-415E-897D-22C13664E2B8",
+      "name" : "ceposto",
+      "rootPath" : "\/Users\/icsone\/Desktop\/icsone\/ceposto\/ceposto-java-server",
+      "runners" : [
+        {
+          "command" : "exec \"$CATALINA_HOME\"\/bin\/catalina.sh run",
+          "commandEdited" : false,
+          "debugEnabled" : false,
+          "debugInjection" : "catalinaOpts",
+          "debugPort" : 53894,
+          "env" : {
+            "CATALINA_BASE" : "\/Users\/icsone\/.config\/dev-runner\/catalina\/2AE60F9B-518D-405A-BEBD-95FB5397B83D",
+            "CATALINA_HOME" : "\/Users\/icsone\/Documents\/Progetti\/apache-tomcat-9.0.41",
+            "JAVA_HOME" : "\/Users\/icsone\/Library\/Java\/JavaVirtualMachines\/corretto-1.8.0_452\/Contents\/Home"
+          },
+          "id" : "2AE60F9B-518D-405A-BEBD-95FB5397B83D",
+          "idea" : {
+            "adapter" : "tomcat",
+            "configurationName" : "Tomcat 9.0.41",
+            "configurationType" : "#com.intellij.j2ee.web.tomcat.TomcatRunConfigurationFactory"
+          },
+          "name" : "Tomcat 9.0.41",
+          "portToCheck" : 8080,
+          "tomcatContextPath" : "\/CePosto",
+          "tomcatDocBase" : "\/Users\/icsone\/Desktop\/icsone\/ceposto\/ceposto-java-server\/target\/ceposto-java-server",
+          "workingDirectory" : "\/Users\/icsone\/Desktop\/icsone\/ceposto\/ceposto-java-server"
+        }
+      ]
+    }
+  ]
+}
+"""#

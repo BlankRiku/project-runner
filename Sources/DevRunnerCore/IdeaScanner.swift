@@ -152,7 +152,8 @@ package enum IdeaScanner {
             return raw.isEmpty ? "/" : raw
         }()
         let port = Int((option(element, "HTTP_PORT") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 8080
-        let debugPort = Int((option(element, "DEBUG_PORT") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 5005
+        // RunnerSettings DEBUG_PORT is an ephemeral IDE listener, not a JDWP address.
+        let debugPort = explicitJdwpPort(element) ?? 5005
         return RunnerConfig(
             id: id,
             name: name,
@@ -342,6 +343,32 @@ package enum IdeaScanner {
             result[name] = MacroExpander.expand(value, projectRoot: request.projectRoot, userHome: request.userHome)
         }
         return result
+    }
+
+    private static func explicitJdwpPort(_ element: XMLElement) -> Int? {
+        let xml = element.xmlString.lowercased()
+        var start = xml.startIndex
+        while let marker = xml.range(of: "jdwp=", range: start..<xml.endIndex) {
+            let after = xml[marker.upperBound...]
+            let chunkEnd = after.firstIndex(where: { $0 == "\"" || $0 == "<" }) ?? after.endIndex
+            let chunk = after[..<chunkEnd]
+            if let address = chunk.range(of: "address=") {
+                var token = ""
+                for character in chunk[address.upperBound...] {
+                    if character == "," || character == " " || character == "\t" || character == "'" {
+                        break
+                    }
+                    token.append(character)
+                    if token.count > 100 { break }
+                }
+                let portText = String(token.split(separator: ":").last ?? "")
+                if let port = Int(portText), (1...65535).contains(port) {
+                    return port
+                }
+            }
+            start = marker.upperBound
+        }
+        return nil
     }
 
     private static func option(_ element: XMLElement, _ name: String) -> String? {
