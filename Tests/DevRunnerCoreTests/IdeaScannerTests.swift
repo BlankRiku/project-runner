@@ -122,6 +122,123 @@ final class IdeaScannerTests: XCTestCase {
         XCTAssertEqual(result.runners.first { $0.name == "Spring" }?.idea?.adapter, .unmapped)
     }
 
+    func testSpringBootWithoutGoalsUsesMavenWrapperAndProjectJdk() throws {
+        let project = root.appendingPathComponent("todo")
+        let home = root.appendingPathComponent("home")
+        let jdk = home.appendingPathComponent("Library/Java/JavaVirtualMachines/corretto-25.0.2/Contents/Home").path
+        try TestSupport.write("<project/>", to: project.appendingPathComponent("pom.xml"))
+        try TestSupport.write("", to: project.appendingPathComponent("mvnw"))
+        try TestSupport.write("""
+        <project version="4">
+          <component name="ProjectRootManager" project-jdk-name="corretto-25 (2)" project-jdk-type="JavaSDK" />
+        </project>
+        """, to: project.appendingPathComponent(".idea/misc.xml"))
+        try TestSupport.write("""
+        <application><component name="ProjectJdkTable"><jdk version="2">
+          <name value="corretto-25 (2)" />
+          <homePath value="$USER_HOME$/Library/Java/JavaVirtualMachines/corretto-25.0.2/Contents/Home" />
+        </jdk></component></application>
+        """, to: root.appendingPathComponent("jdk.table.xml"))
+        try TestSupport.write("""
+        <project version="4">
+          <component name="MavenImportPreferences">
+            <option name="generalSettings">
+              <MavenGeneralSettings>
+                <option name="mavenHomeTypeForPersistence" value="WRAPPER" />
+              </MavenGeneralSettings>
+            </option>
+          </component>
+          <component name="RunManager">
+            <configuration name="TodoApplication" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
+              <option name="SPRING_BOOT_MAIN_CLASS" value="it.icsone.todo.TodoApplication" />
+            </configuration>
+          </component>
+        </project>
+        """, to: project.appendingPathComponent(".idea/workspace.xml"))
+
+        let result = IdeaScanner.scan(IdeaScanRequest(
+            projectRoot: project,
+            configRoot: root.appendingPathComponent("config"),
+            userHome: home,
+            applicationServersFiles: [],
+            jdkTableFiles: [root.appendingPathComponent("jdk.table.xml")]
+        ))
+        let app = try XCTUnwrap(result.runners.first { $0.name == "TodoApplication" })
+        XCTAssertEqual(app.command, "./mvnw '-Dspring-boot.run.mainClass=it.icsone.todo.TodoApplication' spring-boot:run")
+        XCTAssertEqual(app.env["JAVA_HOME"], jdk)
+        XCTAssertEqual(app.workingDirectory, project.path)
+        XCTAssertEqual(app.idea?.adapter, .maven)
+        XCTAssertEqual(app.idea?.configurationType, "SpringBootApplicationConfigurationType")
+        XCTAssertEqual(app.debugInjection, .javaToolOptions)
+        XCTAssertNil(app.importNote)
+    }
+
+    func testMavenHomeFollowsIntelliJSetting() throws {
+        let wrapperProject = root.appendingPathComponent("wrapper-only")
+        try TestSupport.write("<project/>", to: wrapperProject.appendingPathComponent("pom.xml"))
+        try TestSupport.write("""
+        <project version="4">
+          <component name="MavenImportPreferences">
+            <option name="generalSettings">
+              <MavenGeneralSettings>
+                <option name="mavenHomeTypeForPersistence" value="WRAPPER" />
+              </MavenGeneralSettings>
+            </option>
+          </component>
+          <component name="RunManager">
+            <configuration name="TodoApplication" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot">
+              <option name="SPRING_BOOT_MAIN_CLASS" value="it.icsone.todo.TodoApplication" />
+            </configuration>
+          </component>
+        </project>
+        """, to: wrapperProject.appendingPathComponent(".idea/workspace.xml"))
+
+        let customProject = root.appendingPathComponent("custom-maven")
+        let mavenHome = root.appendingPathComponent("apache-maven")
+        try TestSupport.write("", to: mavenHome.appendingPathComponent("bin/mvn"))
+        try TestSupport.write("<project/>", to: customProject.appendingPathComponent("pom.xml"))
+        try TestSupport.write("", to: customProject.appendingPathComponent("mvnw"))
+        try TestSupport.write("""
+        <project version="4">
+          <component name="MavenImportPreferences">
+            <option name="generalSettings">
+              <MavenGeneralSettings>
+                <option name="mavenHomeTypeForPersistence" value="CUSTOM" />
+                <option name="mavenHome" value="\(mavenHome.path)" />
+              </MavenGeneralSettings>
+            </option>
+          </component>
+          <component name="RunManager">
+            <configuration name="boot" type="MavenRunConfiguration" factoryName="Maven">
+              <option name="goals"><list><option value="spring-boot:run" /></list></option>
+            </configuration>
+          </component>
+        </project>
+        """, to: customProject.appendingPathComponent(".idea/workspace.xml"))
+
+        let wrapper = IdeaScanner.scan(IdeaScanRequest(
+            projectRoot: wrapperProject,
+            configRoot: root.appendingPathComponent("config"),
+            userHome: root,
+            applicationServersFiles: [],
+            jdkTableFiles: []
+        ))
+        let missingWrapper = try XCTUnwrap(wrapper.runners.first { $0.name == "TodoApplication" })
+        XCTAssertEqual(missingWrapper.command, "")
+        XCTAssertEqual(missingWrapper.importNote, "Maven wrapper impostato in IntelliJ, ma mvnw non c'è nella radice del progetto.")
+
+        let custom = IdeaScanner.scan(IdeaScanRequest(
+            projectRoot: customProject,
+            configRoot: root.appendingPathComponent("config"),
+            userHome: root,
+            applicationServersFiles: [],
+            jdkTableFiles: []
+        ))
+        let boot = try XCTUnwrap(custom.runners.first { $0.name == "boot" })
+        XCTAssertEqual(boot.command, "\(mavenHome.appendingPathComponent("bin/mvn").path) spring-boot:run")
+        XCTAssertNil(boot.importNote)
+    }
+
     func testDotRunImportsFlaskAndGunicornNotVSCode() throws {
         let project = root.appendingPathComponent("import-service")
         let home = root.appendingPathComponent("home")

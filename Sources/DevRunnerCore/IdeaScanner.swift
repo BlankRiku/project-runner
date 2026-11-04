@@ -126,6 +126,9 @@ package enum IdeaScanner {
         if type.localizedCaseInsensitiveContains("Spring") && !goals(element).isEmpty {
             return mapMaven(element: element, name: name, type: type, request: request)
         }
+        if type.localizedCaseInsensitiveContains("Spring") {
+            return mapSpringBoot(element: element, name: name, type: type, request: request, jdks: jdks)
+        }
         return mapUnmapped(element: element, name: name, type: type, request: request)
     }
 
@@ -309,10 +312,90 @@ package enum IdeaScanner {
         return 5000
     }
 
+    private static func mapSpringBoot(
+        element: XMLElement,
+        name: String,
+        type: String,
+        request: IdeaScanRequest,
+        jdks: [URL]
+    ) -> RunnerConfig {
+        let pom = request.projectRoot.appendingPathComponent("pom.xml")
+        guard FileManager.default.fileExists(atPath: pom.path) else {
+            return mapUnmapped(element: element, name: name, type: type, request: request)
+        }
+        let tool: String
+        switch resolveMaven(request) {
+        case .command(let value):
+            tool = value
+        case .missing(let message):
+            return springRunner(
+                element: element, name: name, type: type, request: request, jdks: jdks,
+                command: "", note: message
+            )
+        }
+        var args = [tool]
+        let mainClass = (option(element, "SPRING_BOOT_MAIN_CLASS") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !mainClass.isEmpty {
+            args.append(ShellWords.quote("-Dspring-boot.run.mainClass=\(mainClass)"))
+        }
+        let profiles = (option(element, "ACTIVE_PROFILES") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !profiles.isEmpty {
+            args.append(ShellWords.quote("-Dspring-boot.run.profiles=\(profiles)"))
+        }
+        args.append("spring-boot:run")
+        var command = args.joined(separator: " ")
+        let params = programParameters(element, request: request)
+        if !params.isEmpty { command += " " + params }
+        return springRunner(
+            element: element, name: name, type: type, request: request, jdks: jdks,
+            command: command, note: nil
+        )
+    }
+
+    private static func springRunner(
+        element: XMLElement,
+        name: String,
+        type: String,
+        request: IdeaScanRequest,
+        jdks: [URL],
+        command: String,
+        note: String?
+    ) -> RunnerConfig {
+        var env = environment(element, request: request)
+        let vm = MacroExpander.expand(vmParameters(element), projectRoot: request.projectRoot, userHome: request.userHome)
+        appendVar("JAVA_TOOL_OPTIONS", value: vm, env: &env)
+        if let jdkName = projectJdkName(request.projectRoot),
+           let home = JetBrainsLookup.jdkHome(name: jdkName, files: jdks, projectRoot: request.projectRoot, userHome: request.userHome) {
+            env["JAVA_HOME"] = home
+        }
+        return RunnerConfig(
+            name: name,
+            command: command,
+            workingDirectory: workingDirectory(element, request: request),
+            env: env,
+            idea: IdeaOrigin(configurationName: name, configurationType: type, adapter: .maven),
+            debugInjection: .javaToolOptions,
+            importNote: note
+        )
+    }
+
     private static func mapMaven(element: XMLElement, name: String, type: String, request: IdeaScanRequest) -> RunnerConfig {
         let goalList = goals(element)
-        let mvnw = request.projectRoot.appendingPathComponent("mvnw")
-        let tool = FileManager.default.fileExists(atPath: mvnw.path) ? "./mvnw" : "mvn"
+        let tool: String
+        switch resolveMaven(request) {
+        case .command(let value):
+            tool = value
+        case .missing(let message):
+            return RunnerConfig(
+                name: name,
+                command: "",
+                workingDirectory: workingDirectory(element, request: request),
+                env: environment(element, request: request),
+                idea: IdeaOrigin(configurationName: name, configurationType: type, adapter: .maven),
+                debugInjection: .javaToolOptions,
+                importNote: message
+            )
+        }
         var command = ([tool] + goalList.map(ShellWords.quote)).joined(separator: " ")
         let params = programParameters(element, request: request)
         if !params.isEmpty { command += " " + params }
@@ -357,6 +440,108 @@ package enum IdeaScanner {
             debugInjection: injection,
             importNote: note
         )
+    }
+
+    private enum MavenHomeKind {
+        case unspecified
+        case wrapper
+        case bundled
+        case custom(String)
+    }
+
+    private enum ResolvedMaven {
+        case command(String)
+        case missing(String)
+    }
+
+    private static func resolveMaven(_ request: IdeaScanRequest) -> ResolvedMaven {
+        let mvnw = request.projectRoot.appendingPathComponent("mvnw")
+        switch mavenHomeKind(request.projectRoot) {
+        case .wrapper:
+            if FileManager.default.fileExists(atPath: mvnw.path) { return .command("./mvnw") }
+            return .missing("Maven wrapper impostato in IntelliJ, ma mvnw non c'è nella radice del progetto.")
+        case .bundled:
+            if let path = bundledMaven(userHome: request.userHome) { return .command(ShellWords.quote(path)) }
+            return .missing("Maven incluso in IntelliJ non trovato.")
+        case .custom(let home):
+            let expanded = MacroExpander.expand(home, projectRoot: request.projectRoot, userHome: request.userHome)
+            let bin = URL(fileURLWithPath: expanded).appendingPathComponent("bin/mvn").path
+            if FileManager.default.fileExists(atPath: bin) { return .command(ShellWords.quote(bin)) }
+            return .missing("Maven «\(expanded)» non trovato.")
+        case .unspecified:
+            if FileManager.default.fileExists(atPath: mvnw.path) { return .command("./mvnw") }
+            return .command("mvn")
+        }
+    }
+
+    private static func mavenHomeKind(_ projectRoot: URL) -> MavenHomeKind {
+        let workspace = projectRoot.appendingPathComponent(".idea/workspace.xml")
+        guard let document = try? XMLDocument(contentsOf: workspace, options: [.nodePreserveWhitespace]),
+              let nodes = try? document.nodes(forXPath: "//MavenGeneralSettings") else { return .unspecified }
+        for case let element as XMLElement in nodes {
+            let type = directOption(element, "mavenHomeTypeForPersistence") ?? ""
+            switch type {
+            case "WRAPPER":
+                return .wrapper
+            case "BUNDLED":
+                return .bundled
+            case "CUSTOM":
+                let home = (directOption(element, "mavenHome") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !home.isEmpty { return .custom(home) }
+            default:
+                continue
+            }
+        }
+        return .unspecified
+    }
+
+    private static func directOption(_ element: XMLElement, _ name: String) -> String? {
+        for child in element.elements(forName: "option") {
+            if child.attribute(forName: "name")?.stringValue == name {
+                return child.attribute(forName: "value")?.stringValue
+            }
+        }
+        return nil
+    }
+
+    private static func bundledMaven(userHome: URL) -> String? {
+        var candidates: [URL] = []
+        let jetbrains = userHome.appendingPathComponent("Library/Application Support/JetBrains", isDirectory: true)
+        if let products = try? FileManager.default.contentsOfDirectory(
+            at: jetbrains,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for product in products {
+                let mvn = product.appendingPathComponent("plugins/maven/lib/maven3/bin/mvn")
+                if FileManager.default.fileExists(atPath: mvn.path) { candidates.append(mvn) }
+            }
+        }
+        for apps in [URL(fileURLWithPath: "/Applications", isDirectory: true), userHome.appendingPathComponent("Applications", isDirectory: true)] {
+            guard let bundles = try? FileManager.default.contentsOfDirectory(at: apps, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else { continue }
+            for bundle in bundles where bundle.pathExtension == "app" {
+                let mvn = bundle.appendingPathComponent("Contents/plugins/maven/lib/maven3/bin/mvn")
+                if FileManager.default.fileExists(atPath: mvn.path) { candidates.append(mvn) }
+            }
+        }
+        let newest = candidates.max { lhs, rhs in
+            let left = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let right = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return left < right
+        }
+        return newest?.path
+    }
+
+    private static func projectJdkName(_ projectRoot: URL) -> String? {
+        let misc = projectRoot.appendingPathComponent(".idea/misc.xml")
+        guard let document = try? XMLDocument(contentsOf: misc, options: [.nodePreserveWhitespace]),
+              let nodes = try? document.nodes(forXPath: "//component[@name='ProjectRootManager']") else { return nil }
+        for case let element as XMLElement in nodes {
+            let name = element.attribute(forName: "project-jdk-name")?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !name.isEmpty { return name }
+        }
+        return nil
     }
 
     private static func unmappedNote(_ type: String) -> String {
