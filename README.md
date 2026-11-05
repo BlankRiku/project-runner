@@ -66,6 +66,20 @@ Dev Runner è libero per uso personale, studio e hobby, e per enti non commercia
 
 Progetti e runner restano sul Mac. Dal pannello, **Apri config.json** apre il file in cui sono salvati.
 
+## 🤝 Supporta il progetto
+
+Se Dev Runner ti ha semplificato le sessioni di sviluppo, ti ha tenuto i servizi a portata di mano o ti ha fatto risparmiare tempo, puoi supportare chi lo sviluppa. Le donazioni aiutano a tenere vivo il progetto e a finanziare i prossimi aggiornamenti.
+
+### 💖 Come supportare
+
+Puoi inviare una donazione direttamente con PayPal:
+
+<p align="center">
+  <a href="https://www.paypal.me/BlankRiku" target="_blank">
+    <img src="https://img.shields.io/badge/Donate-PayPal-blue.svg?style=for-the-badge&logo=paypal" alt="Dona con PayPal" />
+  </a>
+</p>
+
 ---
 
 Compilazione, import nel dettaglio e pacchetto sono in [docs/sviluppo.md](docs/sviluppo.md).
