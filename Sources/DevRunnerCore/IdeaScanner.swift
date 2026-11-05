@@ -200,7 +200,12 @@ package enum IdeaScanner {
             env: env,
             debugPort: debugPort,
             portToCheck: port,
-            idea: IdeaOrigin(configurationName: name, configurationType: type, adapter: .tomcat),
+            idea: IdeaOrigin(
+                configurationName: name,
+                configurationType: type,
+                adapter: .tomcat,
+                sourceRoot: Project.normalizePath(request.projectRoot.path)
+            ),
             debugInjection: .catalinaOpts,
             importNote: notes.isEmpty ? nil : notes.joined(separator: " "),
             tomcatContextPath: context,
@@ -388,7 +393,7 @@ package enum IdeaScanner {
             command: command,
             workingDirectory: workingDirectory(element, request: request),
             env: env,
-            idea: IdeaOrigin(configurationName: name, configurationType: type, adapter: .maven),
+            idea: origin(name: name, type: type, adapter: .maven, request: request),
             debugInjection: .javaToolOptions,
             importNote: note
         )
@@ -406,7 +411,7 @@ package enum IdeaScanner {
                 command: "",
                 workingDirectory: workingDirectory(element, request: request),
                 env: environment(element, request: request),
-                idea: IdeaOrigin(configurationName: name, configurationType: type, adapter: .maven),
+                idea: origin(name: name, type: type, adapter: .maven, request: request),
                 debugInjection: .javaToolOptions,
                 importNote: message
             )
@@ -422,7 +427,7 @@ package enum IdeaScanner {
             command: command,
             workingDirectory: workingDirectory(element, request: request),
             env: env,
-            idea: IdeaOrigin(configurationName: name, configurationType: type, adapter: .maven),
+            idea: origin(name: name, type: type, adapter: .maven, request: request),
             debugInjection: .javaToolOptions
         )
     }
@@ -451,9 +456,23 @@ package enum IdeaScanner {
             command: command,
             workingDirectory: workingDirectory,
             env: environment(element, request: request),
-            idea: IdeaOrigin(configurationName: name, configurationType: type, adapter: adapter),
+            idea: origin(name: name, type: type, adapter: adapter, request: request),
             debugInjection: injection,
             importNote: note
+        )
+    }
+
+    private static func origin(
+        name: String,
+        type: String,
+        adapter: IdeaAdapter,
+        request: IdeaScanRequest
+    ) -> IdeaOrigin {
+        IdeaOrigin(
+            configurationName: name,
+            configurationType: type,
+            adapter: adapter,
+            sourceRoot: Project.normalizePath(request.projectRoot.path)
         )
     }
 

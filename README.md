@@ -25,7 +25,7 @@ Su una macchina di sviluppo convivono spesso più servizi: un’applicazione Jav
 
 ## Cosa importa
 
-Aggiungi la cartella del progetto e scegli le run da tenere.
+Aggiungi una o più cartelle al progetto e scegli le run da tenere. Frontend e backend in repository distinti possono stare nello stesso blocco.
 
 | Ambiente | Configurazioni |
 | --- | --- |
@@ -34,15 +34,15 @@ Aggiungi la cartella del progetto e scegli le run da tenere.
 
 Le variabili d’ambiente della run vengono applicate all’avvio. Una configurazione non riconosciuta compare comunque nell’elenco: completi il comando a mano. Un comando che hai modificato resta tuo: **Sincronizza** non lo sovrascrive.
 
-Per un microservizio indica la sua cartella, non la root del repository. È lì che stanno le configurazioni.
+Per un microservizio indica la sua cartella, non la root del repository. È lì che stanno le configurazioni. Un progetto può avere più cartelle: **Sincronizza** le rilegge tutte.
 
 ## Come si usa
 
 1. Clicca l’icona di Dev Runner nella barra dei menu.
-2. Scegli **Aggiungi Progetto**, indica la cartella e seleziona le run da importare. In alternativa crea un runner manuale.
+2. Scegli **Aggiungi Progetto**, indica una o più cartelle e seleziona le run da importare. In alternativa crea un runner manuale. Su un progetto già presente, **Cartella** ne aggiunge un’altra.
 3. Premi **Avvia**. Se la porta prevista è già occupata, l’avvio si ferma e te lo segnala.
 4. Apri **Log** per l’output, **Riavvia** dopo una modifica, **Libera porta** se qualcosa è rimasto in ascolto.
-5. Usa **Sincronizza** quando cambi le run nell’IDE.
+5. Usa **Sincronizza** quando cambi le run nell’IDE: vedi di nuovo l’elenco e scegli cosa tenere o togliere.
 
 Dal pannello puoi anche aprire la configurazione salvata sul Mac, terminare tutti i servizi e uscire.
 

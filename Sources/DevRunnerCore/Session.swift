@@ -107,18 +107,98 @@ package final class Session {
         changed()
     }
 
-    package func resync(projectID: UUID) {
+    /// Scans every project folder without changing runners.
+    package func scanProject(projectID: UUID) -> [RunnerConfig] {
+        guard let project = projects.first(where: { $0.id == projectID }) else { return [] }
+        var imported: [RunnerConfig] = []
+        for root in project.roots {
+            let scanned = IdeaScanner.scan(IdeaScanRequest(
+                projectRoot: URL(fileURLWithPath: root, isDirectory: true),
+                configRoot: configRoot,
+                userHome: userHome
+            ))
+            imported.append(contentsOf: scanned.runners)
+        }
+        return imported
+    }
+
+    /// Applies the chosen scan results: updates matches, adds new, removes deselected imports. Manual runners stay.
+    package func applyResync(projectID: UUID, selected: [RunnerConfig]) {
         guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return }
         let project = projects[index]
-        let scanned = IdeaScanner.scan(IdeaScanRequest(
-            projectRoot: URL(fileURLWithPath: project.rootPath, isDirectory: true),
+        let next = IdeaImporter.applySelection(
+            existing: project.runners,
+            selected: selected,
             configRoot: configRoot,
-            userHome: userHome
-        ))
-        projects[index].runners = IdeaImporter.resync(existing: project.runners, imported: scanned.runners, configRoot: configRoot)
+            primaryRoot: project.roots.first
+        )
+        let kept = Set(next.map(\.id))
+        for runner in project.runners where !kept.contains(runner.id) {
+            stop(runnerID: runner.id)
+            restartAfterStop.remove(runner.id)
+            forget(runner.id)
+        }
+        projects[index].runners = next
         indexRunners()
         persist()
         changed()
+    }
+
+    /// Scans and keeps every found configuration (tests and callers that want a full sync).
+    package func resync(projectID: UUID) {
+        applyResync(projectID: projectID, selected: scanProject(projectID: projectID))
+    }
+
+    /// Adds another folder to an existing project. Returns a short failure reason, or `nil` on success.
+    @discardableResult
+    package func addRoot(projectID: UUID, path: String) -> String? {
+        guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return "Progetto non trovato." }
+        let normalized = Project.normalizePath(path)
+        guard !normalized.isEmpty else { return "Cartella non valida." }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: normalized, isDirectory: &isDir), isDir.boolValue else {
+            return "Cartella non valida."
+        }
+        if projects[index].roots.contains(normalized) {
+            return "Cartella già presente."
+        }
+        var roots = projects[index].roots
+        roots.append(normalized)
+        projects[index].setRoots(roots)
+        persist()
+        changed()
+        return nil
+    }
+
+    /// Removes a folder and its imported runners. Manual runners stay. Refuses when only one folder remains.
+    @discardableResult
+    package func removeRoot(projectID: UUID, path: String) -> String? {
+        guard let index = projects.firstIndex(where: { $0.id == projectID }) else { return "Progetto non trovato." }
+        let normalized = Project.normalizePath(path)
+        guard projects[index].roots.contains(normalized) else { return "Cartella non trovata." }
+        guard projects[index].roots.count > 1 else {
+            return "Serve almeno una cartella."
+        }
+        let removedRunners = projects[index].runners.filter { runner in
+            guard let source = runner.idea?.sourceRoot.map(Project.normalizePath) else { return false }
+            return source == normalized
+        }
+        for runner in removedRunners {
+            stop(runnerID: runner.id)
+            restartAfterStop.remove(runner.id)
+            forget(runner.id)
+        }
+        projects[index].runners.removeAll { runner in
+            guard let source = runner.idea?.sourceRoot.map(Project.normalizePath) else { return false }
+            return source == normalized
+        }
+        var roots = projects[index].roots
+        roots.removeAll { $0 == normalized }
+        projects[index].setRoots(roots)
+        indexRunners()
+        persist()
+        changed()
+        return nil
     }
 
     /// Starts the runner. Returns a short failure reason for the UI, or `nil` if start was accepted or ignored.

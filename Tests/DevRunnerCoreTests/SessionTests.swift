@@ -114,6 +114,70 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(session.logs(for: runnerID).lines, ["hello", "world"])
     }
 
+    func testAddRootRejectsDuplicateAndRemoveKeepsManual() throws {
+        let primary = try TestSupport.makeDirectory()
+        defer { TestSupport.remove(primary) }
+        let secondary = try TestSupport.makeDirectory()
+        defer { TestSupport.remove(secondary) }
+        let imported = RunnerConfig(
+            name: "dev",
+            command: "npm run dev",
+            workingDirectory: primary.path,
+            idea: IdeaOrigin(
+                configurationName: "dev",
+                configurationType: "js.build_tools.npm",
+                adapter: .npm,
+                sourceRoot: Project.normalizePath(primary.path)
+            )
+        )
+        let manual = RunnerConfig(name: "manual", command: "echo hi", workingDirectory: primary.path)
+        let project = Project(name: "P", rootPath: primary.path, runners: [imported, manual])
+        session.addProject(project)
+        XCTAssertNil(session.addRoot(projectID: project.id, path: secondary.path))
+        XCTAssertEqual(session.projects[0].roots.count, 2)
+        XCTAssertEqual(session.addRoot(projectID: project.id, path: secondary.path), "Cartella già presente.")
+        XCTAssertEqual(session.removeRoot(projectID: project.id, path: primary.path), nil)
+        XCTAssertEqual(session.projects[0].roots, [Project.normalizePath(secondary.path)])
+        XCTAssertEqual(session.projects[0].runners.map(\.name), ["manual"])
+        XCTAssertEqual(session.removeRoot(projectID: project.id, path: secondary.path), "Serve almeno una cartella.")
+    }
+
+    func testResyncScansEveryRoot() throws {
+        let front = try TestSupport.makeDirectory()
+        defer { TestSupport.remove(front) }
+        let back = try TestSupport.makeDirectory()
+        defer { TestSupport.remove(back) }
+        try FileManager.default.createDirectory(
+            at: front.appendingPathComponent(".vscode"),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: back.appendingPathComponent(".vscode"),
+            withIntermediateDirectories: true
+        )
+        try TestSupport.write(
+            """
+            {"version":"0.2.0","configurations":[{"name":"start","type":"node","request":"launch","runtimeExecutable":"npm","runtimeArgs":["run","start"]}]}
+            """,
+            to: front.appendingPathComponent(".vscode/launch.json")
+        )
+        try TestSupport.write(
+            """
+            {"version":"0.2.0","configurations":[{"name":"start","type":"node","request":"launch","runtimeExecutable":"npm","runtimeArgs":["run","start"]}]}
+            """,
+            to: back.appendingPathComponent(".vscode/launch.json")
+        )
+        let project = Project(name: "todo", rootPath: front.path, roots: [front.path, back.path])
+        session.addProject(project)
+        session.resync(projectID: project.id)
+        let runners = session.projects[0].runners
+        XCTAssertEqual(runners.count, 2)
+        XCTAssertEqual(Set(runners.map { $0.idea?.sourceRoot }), Set([
+            Project.normalizePath(front.path),
+            Project.normalizePath(back.path)
+        ]))
+    }
+
     private func add(command: String, port: Int?, debug: Bool = false, injection: DebugInjection = .none) -> Project {
         let runner = RunnerConfig(
             name: "run",

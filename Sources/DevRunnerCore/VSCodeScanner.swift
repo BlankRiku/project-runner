@@ -100,7 +100,8 @@ package enum VSCodeScanner {
             workingDirectory: context.directory(cwd),
             env: env,
             portToCheck: port(in: env),
-            note: notes
+            note: notes,
+            sourceRoot: Project.normalizePath(context.projectRoot.path)
         )
     }
 
@@ -191,7 +192,8 @@ package enum VSCodeScanner {
             workingDirectory: context.projectRoot.path,
             env: environment(object, context: context),
             portToCheck: nil,
-            note: notes
+            note: notes,
+            sourceRoot: Project.normalizePath(context.projectRoot.path)
         )
     }
 
@@ -207,7 +209,8 @@ package enum VSCodeScanner {
             workingDirectory: task.workingDirectory,
             env: task.env,
             portToCheck: port(in: task.env),
-            note: notes
+            note: notes,
+            sourceRoot: task.sourceRoot
         )
     }
 
@@ -218,7 +221,8 @@ package enum VSCodeScanner {
         workingDirectory: String,
         env: [String: String],
         portToCheck: Int?,
-        note: [String]
+        note: [String],
+        sourceRoot: String
     ) -> RunnerConfig {
         RunnerConfig(
             name: name,
@@ -226,7 +230,12 @@ package enum VSCodeScanner {
             workingDirectory: workingDirectory,
             env: env,
             portToCheck: portToCheck,
-            idea: IdeaOrigin(configurationName: name, configurationType: configurationType, adapter: .vscode),
+            idea: IdeaOrigin(
+                configurationName: name,
+                configurationType: configurationType,
+                adapter: .vscode,
+                sourceRoot: sourceRoot
+            ),
             debugInjection: .none,
             importNote: note.isEmpty ? nil : note.joined(separator: " ")
         )
@@ -340,6 +349,7 @@ private struct TaskDef {
     var sequence: Bool
     var workingDirectory: String
     var env: [String: String]
+    var sourceRoot: String
 
     init?(_ object: [String: Any], context: Context) {
         let label = VSCodeScannerLabel.label(object)
@@ -380,6 +390,7 @@ private struct TaskDef {
         self.sequence = order.lowercased() == "sequence"
         self.workingDirectory = context.directory(cwd)
         self.env = env
+        self.sourceRoot = Project.normalizePath(context.projectRoot.path)
     }
 
     private static func dependencies(_ value: Any?) -> [String] {

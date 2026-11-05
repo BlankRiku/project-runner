@@ -19,6 +19,19 @@ package struct IdeaOrigin: Codable, Equatable, Sendable {
     package var configurationName: String
     package var configurationType: String
     package var adapter: IdeaAdapter
+    package var sourceRoot: String?
+
+    package init(
+        configurationName: String,
+        configurationType: String,
+        adapter: IdeaAdapter,
+        sourceRoot: String? = nil
+    ) {
+        self.configurationName = configurationName
+        self.configurationType = configurationType
+        self.adapter = adapter
+        self.sourceRoot = sourceRoot
+    }
 }
 
 package struct RunnerConfig: Codable, Equatable, Sendable, Identifiable {
@@ -98,13 +111,81 @@ package struct Project: Codable, Equatable, Sendable, Identifiable {
     package var id: UUID
     package var name: String
     package var rootPath: String
+    package var roots: [String]
     package var runners: [RunnerConfig]
 
-    package init(id: UUID = UUID(), name: String, rootPath: String, runners: [RunnerConfig] = []) {
+    package init(
+        id: UUID = UUID(),
+        name: String,
+        rootPath: String,
+        roots: [String]? = nil,
+        runners: [RunnerConfig] = []
+    ) {
         self.id = id
         self.name = name
-        self.rootPath = rootPath
+        let resolved = Self.normalizedRoots(roots ?? [rootPath], fallback: rootPath)
+        self.roots = resolved
+        self.rootPath = resolved[0]
         self.runners = runners
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, rootPath, roots, runners
+    }
+
+    package init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        let decodedRoot = try container.decode(String.self, forKey: .rootPath)
+        let decodedRoots = try container.decodeIfPresent([String].self, forKey: .roots)
+        let resolved = Self.normalizedRoots(decodedRoots ?? [decodedRoot], fallback: decodedRoot)
+        roots = resolved
+        rootPath = resolved[0]
+        runners = try container.decodeIfPresent([RunnerConfig].self, forKey: .runners) ?? []
+    }
+
+    package func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(roots[0], forKey: .rootPath)
+        try container.encode(roots, forKey: .roots)
+        try container.encode(runners, forKey: .runners)
+    }
+
+    /// Keeps `rootPath` aligned with the first folder after roots change.
+    package mutating func setRoots(_ paths: [String]) {
+        let resolved = Self.normalizedRoots(paths, fallback: rootPath)
+        roots = resolved
+        rootPath = resolved[0]
+    }
+
+    private static func normalizedRoots(_ paths: [String], fallback: String) -> [String] {
+        let cleaned = paths
+            .map { normalizePath($0) }
+            .filter { !$0.isEmpty }
+        if cleaned.isEmpty {
+            let fallbackPath = normalizePath(fallback)
+            return fallbackPath.isEmpty ? ["/"] : [fallbackPath]
+        }
+        var seen = Set<String>()
+        var unique: [String] = []
+        for path in cleaned where seen.insert(path).inserted {
+            unique.append(path)
+        }
+        return unique
+    }
+
+    package static func normalizePath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        let url = URL(fileURLWithPath: trimmed, isDirectory: true).standardizedFileURL
+        var result = url.path
+        while result.count > 1 && result.hasSuffix("/") {
+            result.removeLast()
+        }
+        return result
     }
 }
 

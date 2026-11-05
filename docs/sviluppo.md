@@ -17,7 +17,7 @@ La configurazione dell’app sta in `~/.config/dev-runner/config.json`.
 
 ## Import
 
-Lo scanner legge `.idea/runConfigurations`, `.idea/workspace.xml`, `.run/*.run.xml`, `.vscode/launch.json` e `.vscode/tasks.json`. I file di Visual Studio Code sono JSONC: commenti e virgole finali sono accettati. Le configurazioni finiscono nello stesso elenco dei runner di IntelliJ.
+Lo scanner legge `.idea/runConfigurations`, `.idea/workspace.xml`, `.run/*.run.xml`, `.vscode/launch.json` e `.vscode/tasks.json` in ciascuna cartella del progetto (`roots`). I file di Visual Studio Code sono JSONC: commenti e virgole finali sono accettati. Le configurazioni finiscono nello stesso elenco dei runner di IntelliJ. Ogni run importata porta `sourceRoot`, così **Sincronizza** distingue configurazioni omonime in cartelle diverse. **Sincronizza** apre di nuovo l’elenco dello scan: le run già presenti partono selezionate, le nuove anche; deselezionare toglie la run (i runner manuali restano). Un `config.json` senza `roots` usa ancora solo `rootPath`.
 
 | Origine | Comando |
 | --- | --- |

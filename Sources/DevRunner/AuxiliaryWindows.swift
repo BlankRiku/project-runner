@@ -64,6 +64,32 @@ enum DirectoryPicker {
     }
 }
 
+enum FormWindowMetrics {
+    static let minWidth: CGFloat = 420
+    static let maxWidth: CGFloat = 560
+    static let minHeight: CGFloat = 200
+    /// Whole window, title bar included, stays at about this fraction of the screen.
+    static let maxScreenFraction: CGFloat = 0.65
+    /// Headline, paddings and the pinned footer live outside the scrolling body.
+    static let outsideScroll: CGFloat = 120
+    /// Sync sheet also shows project name and a caption above the list.
+    static let syncOutsideScroll: CGFloat = 190
+
+    static func maxContentHeight(screenHeight: CGFloat, visibleHeight: CGFloat, titleBar: CGFloat = 28) -> CGFloat {
+        let limit = min(screenHeight * maxScreenFraction, visibleHeight)
+        return max(80, limit - titleBar)
+    }
+
+    static func maxScrollHeight(
+        screenHeight: CGFloat,
+        visibleHeight: CGFloat,
+        titleBar: CGFloat = 28,
+        outsideScroll: CGFloat = outsideScroll
+    ) -> CGFloat {
+        max(80, maxContentHeight(screenHeight: screenHeight, visibleHeight: visibleHeight, titleBar: titleBar) - outsideScroll)
+    }
+}
+
 @MainActor
 final class FormWindowPresenter: NSObject, NSWindowDelegate {
     static let shared = FormWindowPresenter()
@@ -110,10 +136,16 @@ final class FormWindowPresenter: NSObject, NSWindowDelegate {
         if size.width < 200 || size.height < 160 {
             size = NSSize(width: 440, height: 480)
         }
-        size.width = min(max(size.width, 420), 560)
-        size.height = min(max(size.height, 200), 700)
+        let screen = panel.screen ?? NSScreen.main
+        let maxHeight = FormWindowMetrics.maxContentHeight(
+            screenHeight: screen?.frame.height ?? 900,
+            visibleHeight: screen?.visibleFrame.height ?? 900
+        )
+        size.width = min(max(size.width, FormWindowMetrics.minWidth), FormWindowMetrics.maxWidth)
+        size.height = min(max(size.height, FormWindowMetrics.minHeight), maxHeight)
         panel.setContentSize(size)
         panel.center()
+        applyHeightLimit(to: panel)
 
         window = panel
         if !holdingActivation {
@@ -124,6 +156,43 @@ final class FormWindowPresenter: NSObject, NSWindowDelegate {
         }
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
+        applyHeightLimit(to: panel)
+    }
+
+    /// `preferredContentSize` keeps resizing the panel after the first layout.
+    /// The window frame cannot grow past 65% of the screen height.
+    private func applyHeightLimit(to panel: NSWindow) {
+        guard let screen = panel.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        let contentSize = panel.contentRect(forFrameRect: panel.frame).size
+        let titleBar = panel.frame.height - contentSize.height
+        let maxWindowHeight = screen.frame.height * FormWindowMetrics.maxScreenFraction
+        let maxHeight = FormWindowMetrics.maxContentHeight(
+            screenHeight: screen.frame.height,
+            visibleHeight: visible.height,
+            titleBar: titleBar
+        )
+        let maxFrame = panel.frameRect(forContentRect: NSRect(
+            origin: .zero,
+            size: NSSize(width: FormWindowMetrics.maxWidth, height: maxHeight)
+        ))
+        panel.maxSize = NSSize(width: maxFrame.width, height: min(maxFrame.height, maxWindowHeight))
+        let minFrame = panel.frameRect(forContentRect: NSRect(
+            origin: .zero,
+            size: NSSize(width: FormWindowMetrics.minWidth, height: min(FormWindowMetrics.minHeight, maxHeight))
+        ))
+        panel.minSize = minFrame.size
+
+        if contentSize.height > maxHeight + 0.5 || panel.frame.height > maxWindowHeight + 0.5 {
+            panel.setContentSize(NSSize(width: min(contentSize.width, FormWindowMetrics.maxWidth), height: maxHeight))
+            panel.center()
+        }
+        var frame = panel.frame
+        if frame.maxY > visible.maxY { frame.origin.y -= frame.maxY - visible.maxY }
+        if frame.minY < visible.minY { frame.origin.y = visible.minY }
+        if frame != panel.frame {
+            panel.setFrame(frame, display: false)
+        }
     }
 
     func close() {

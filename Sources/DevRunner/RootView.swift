@@ -162,6 +162,76 @@ struct RootView: View {
                 .environmentObject(model)
         )
     }
+
+}
+
+private enum ProjectRootLabels {
+    static func labels(for roots: [String]) -> [String: String] {
+        let bases = roots.map { URL(fileURLWithPath: $0).lastPathComponent }
+        var counts: [String: Int] = [:]
+        for base in bases { counts[base, default: 0] += 1 }
+        var result: [String: String] = [:]
+        for root in roots {
+            let url = URL(fileURLWithPath: root)
+            let base = url.lastPathComponent
+            if counts[base, default: 0] > 1 {
+                let parent = url.deletingLastPathComponent().lastPathComponent
+                result[root] = parent.isEmpty ? base : "\(parent)/\(base)"
+            } else {
+                result[root] = base
+            }
+        }
+        return result
+    }
+
+    static func label(for root: String, among roots: [String]) -> String {
+        labels(for: roots)[root] ?? URL(fileURLWithPath: root).lastPathComponent
+    }
+}
+
+private struct RunnerGroup: Identifiable {
+    var id: String
+    var title: String
+    var runners: [RunnerConfig]
+}
+
+private func runnerGroups(for project: Project) -> [RunnerGroup] {
+    let labels = ProjectRootLabels.labels(for: project.roots)
+    var byRoot: [String: [RunnerConfig]] = [:]
+    var manual: [RunnerConfig] = []
+    let primary = project.roots.first.map(Project.normalizePath)
+    for runner in project.runners {
+        if runner.idea == nil {
+            manual.append(runner)
+            continue
+        }
+        if let source = runner.idea?.sourceRoot.map(Project.normalizePath) {
+            byRoot[source, default: []].append(runner)
+        } else if let primary {
+            byRoot[primary, default: []].append(runner)
+        } else {
+            manual.append(runner)
+        }
+    }
+    var groups: [RunnerGroup] = []
+    var used = Set<String>()
+    for root in project.roots {
+        used.insert(root)
+        let runners = byRoot[root] ?? []
+        guard !runners.isEmpty else { continue }
+        groups.append(RunnerGroup(id: root, title: labels[root] ?? URL(fileURLWithPath: root).lastPathComponent, runners: runners))
+    }
+    for (root, runners) in byRoot where !used.contains(root) && !runners.isEmpty {
+        groups.append(RunnerGroup(
+            id: root,
+            title: ProjectRootLabels.label(for: root, among: project.roots + [root]),
+            runners: runners
+        ))
+    }
+    if !manual.isEmpty {
+        groups.append(RunnerGroup(id: "__manual__", title: "Manuali", runners: manual))
+    }
+    return groups
 }
 
 private struct ProjectBlock: View {
@@ -182,36 +252,67 @@ private struct ProjectBlock: View {
                     .background(projectIsActive ? Color.green.opacity(0.2) : Color.white.opacity(0.08), in: Capsule())
                     .foregroundStyle(projectIsActive ? Color.green : Theme.secondary)
             }
-            Text(project.rootPath)
-                .font(.caption)
-                .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            ForEach(project.roots, id: \.self) { root in
+                rootRow(root)
+            }
             HStack(spacing: 4) {
-                WordButton(title: "Finder", systemImage: "folder", help: "Apri la cartella nel Finder") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: project.rootPath))
+                WordButton(title: "Aggiungi Cartella", systemImage: "folder.badge.plus", help: "Aggiungi un’altra cartella al progetto") {
+                    addFolder()
                 }
-                WordButton(title: "Terminale", systemImage: "terminal", help: "Apri la cartella nel Terminale") {
-                    openTerminal(project.rootPath)
-                }
-                WordButton(title: "Sincronizza", systemImage: "arrow.triangle.2.circlepath", help: "Sincronizza le run configuration di IntelliJ e Visual Studio Code") {
-                    model.session.resync(projectID: project.id)
+                WordButton(title: "Sincronizza", systemImage: "arrow.triangle.2.circlepath", help: "Rileggi le run configuration e scegli cosa tenere") {
+                    FormWindowPresenter.shared.present(
+                        title: "Sincronizza",
+                        content: SyncProjectSheet(projectID: project.id, onClose: { FormWindowPresenter.shared.close() })
+                            .environmentObject(model)
+                    )
                 }
                 Spacer(minLength: 8)
                 WordButton(title: "Elimina", systemImage: "trash", help: "Elimina il progetto", role: .destructive) {
                     confirmDelete()
                 }
             }
-            if !project.runners.isEmpty {
+            let groups = runnerGroups(for: project)
+            if !groups.isEmpty {
                 Divider().overlay(Theme.line)
             }
-            ForEach(project.runners) { runner in
-                RunnerRow(project: project, runner: runner, onLogs: { onLogs(runner.id) }, onEdit: { onEdit(runner) })
+            ForEach(groups) { group in
+                Text(group.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.secondary)
+                ForEach(group.runners) { runner in
+                    RunnerRow(project: project, runner: runner, onLogs: { onLogs(runner.id) }, onEdit: { onEdit(runner) })
+                }
             }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.card, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func rootRow(_ root: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(ProjectRootLabels.label(for: root, among: project.roots))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.text)
+            Text(root)
+                .font(.caption2)
+                .foregroundStyle(Theme.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            HStack(spacing: 4) {
+                WordButton(title: "Finder", systemImage: "folder", help: "Apri la cartella nel Finder") {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: root))
+                }
+                WordButton(title: "Terminale", systemImage: "terminal", help: "Apri la cartella nel Terminale") {
+                    openTerminal(root)
+                }
+                if project.roots.count > 1 {
+                    WordButton(title: "Rimuovi", systemImage: "minus.circle", help: "Rimuovi questa cartella dal progetto", role: .destructive) {
+                        confirmRemoveRoot(root)
+                    }
+                }
+            }
+        }
     }
 
     private var projectIsActive: Bool {
@@ -226,6 +327,48 @@ private struct ProjectBlock: View {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         process.arguments = ["-a", "Terminal", path]
         try? process.run()
+    }
+
+    private func addFolder() {
+        guard let url = DirectoryPicker.chooseDirectory() else { return }
+        if let failure = model.session.addRoot(projectID: project.id, path: url.path) {
+            PopoverNotices.shared.show(failure)
+        } else {
+            PopoverNotices.shared.show("Cartella aggiunta")
+            FormWindowPresenter.shared.present(
+                title: "Sincronizza",
+                content: SyncProjectSheet(projectID: project.id, onClose: { FormWindowPresenter.shared.close() })
+                    .environmentObject(model)
+            )
+        }
+    }
+
+    private func confirmRemoveRoot(_ root: String) {
+        let label = ProjectRootLabels.label(for: root, among: project.roots)
+        let projectID = project.id
+        let imported = project.runners.filter {
+            $0.idea?.sourceRoot.map(Project.normalizePath) == Project.normalizePath(root)
+        }
+        let liveCount = imported.filter { runner in
+            let phase = model.runtime(for: runner.id).phase
+            return phase == .running || phase == .starting
+        }.count
+        var detail = "Le run importate da «\(label)» verranno rimosse. I runner manuali restano."
+        if liveCount == 1 {
+            detail += " Il runner avviato verrà fermato."
+        } else if liveCount > 1 {
+            detail += " I runner avviati verranno fermati."
+        }
+        PopoverNotices.shared.askConfirm(
+            title: "Rimuovere la cartella «\(label)»?",
+            detail: detail
+        ) {
+            if let failure = model.session.removeRoot(projectID: projectID, path: root) {
+                PopoverNotices.shared.show(failure)
+            } else {
+                PopoverNotices.shared.show("Cartella rimossa")
+            }
+        }
     }
 
     private func confirmDelete() {
@@ -552,11 +695,129 @@ private struct LogsView: View {
     }
 }
 
+private struct SyncProjectSheet: View {
+    @EnvironmentObject private var model: AppModel
+    let projectID: UUID
+    var onClose: () -> Void
+    @State private var found: [RunnerConfig] = []
+    @State private var selected: Set<UUID> = []
+    @State private var scanned = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sincronizza").font(.headline)
+            if let project {
+                Text(project.name).font(.subheadline)
+                Text("Scegli le run da tenere. Quelle deselezionate vengono rimosse; i runner manuali restano.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.secondary)
+                MenuBarColumn(maxHeight: maxScrollHeight) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if scanned && found.isEmpty {
+                            Text("Nessuna run configuration di IntelliJ o Visual Studio Code")
+                                .foregroundStyle(Theme.secondary)
+                        }
+                        ForEach(found) { runner in
+                            Toggle(isOn: binding(runner.id)) {
+                                VStack(alignment: .leading) {
+                                    HStack(spacing: 6) {
+                                        Text(runner.name)
+                                        if let source = runner.idea?.sourceRoot {
+                                            Text(ProjectRootLabels.label(for: source, among: project.roots))
+                                                .font(.caption2)
+                                                .foregroundStyle(Theme.secondary)
+                                        }
+                                        if IdeaImporter.isPresent(scanned: runner, in: project.runners, primaryRoot: project.roots.first) {
+                                            Text("già presente")
+                                                .font(.caption2)
+                                                .foregroundStyle(Theme.secondary)
+                                        } else {
+                                            Text("nuova")
+                                                .font(.caption2)
+                                                .foregroundStyle(Color.green.opacity(0.85))
+                                        }
+                                    }
+                                    if runner.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text("Comando da completare").font(.caption)
+                                        if let note = runner.importNote { Text(note).font(.caption2) }
+                                    } else {
+                                        Text(runner.command).font(.caption.monospaced()).lineLimit(1)
+                                    }
+                                }
+                            }
+                            .toggleStyle(.checkbox)
+                        }
+                    }
+                }
+            } else {
+                Text("Progetto non trovato").foregroundStyle(Theme.secondary)
+            }
+            HStack {
+                Button("Annulla") { onClose() }
+                Spacer()
+                Button("Applica") { apply() }
+                    .disabled(project == nil)
+            }
+        }
+        .padding(16)
+        .frame(width: 440)
+        .frame(maxHeight: windowMaxHeight, alignment: .top)
+        .preferredColorScheme(.dark)
+        .onAppear { scan() }
+    }
+
+    private var project: Project? {
+        model.projects.first { $0.id == projectID }
+    }
+
+    private var windowMaxHeight: CGFloat {
+        FormWindowMetrics.maxContentHeight(
+            screenHeight: NSScreen.main?.frame.height ?? 900,
+            visibleHeight: NSScreen.main?.visibleFrame.height ?? 900
+        )
+    }
+
+    private var maxScrollHeight: CGFloat {
+        FormWindowMetrics.maxScrollHeight(
+            screenHeight: NSScreen.main?.frame.height ?? 900,
+            visibleHeight: NSScreen.main?.visibleFrame.height ?? 900,
+            outsideScroll: FormWindowMetrics.syncOutsideScroll
+        )
+    }
+
+    private func binding(_ id: UUID) -> Binding<Bool> {
+        Binding(get: { selected.contains(id) }, set: { isOn in
+            if isOn { selected.insert(id) } else { selected.remove(id) }
+        })
+    }
+
+    private func scan() {
+        guard project != nil else {
+            found = []
+            selected = []
+            scanned = true
+            return
+        }
+        let runners = model.session.scanProject(projectID: projectID)
+        found = runners
+        // Già presenti e nuove partono selezionate; deselezionare toglie la run.
+        selected = Set(runners.map(\.id))
+        scanned = true
+    }
+
+    private func apply() {
+        let chosen = found.filter { selected.contains($0.id) }
+        model.session.applyResync(projectID: projectID, selected: chosen)
+        PopoverNotices.shared.show("Progetto sincronizzato")
+        onClose()
+    }
+}
+
 private struct AddProjectSheet: View {
     @EnvironmentObject private var model: AppModel
     var onClose: () -> Void
     @State private var name = ""
-    @State private var folder = ""
+    @State private var folders: [String] = []
     @State private var found: [RunnerConfig] = []
     @State private var selected: Set<UUID> = []
     @State private var scanned = false
@@ -564,21 +825,48 @@ private struct AddProjectSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Aggiungi Progetto").font(.headline)
-            TextField("Nome", text: $name)
-            HStack {
-                TextField("Cartella", text: $folder)
-                Button("Sfoglia") { browse() }
-            }
-            Text("Run configuration di IntelliJ e Visual Studio Code").font(.subheadline)
-            if scanned && found.isEmpty {
-                Text("Nessuna run configuration di IntelliJ o Visual Studio Code").foregroundStyle(Theme.secondary)
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 6) {
+            MenuBarColumn(maxHeight: maxScrollHeight) {
+                VStack(alignment: .leading, spacing: 12) {
+                    TextField("Nome", text: $name)
+                    HStack {
+                        Text("Cartelle").font(.subheadline)
+                        Spacer()
+                        Button("Aggiungi") { browse() }
+                    }
+                    if folders.isEmpty {
+                        Text("Nessuna cartella").foregroundStyle(Theme.secondary)
+                    }
+                    ForEach(folders, id: \.self) { folder in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(ProjectRootLabels.label(for: folder, among: folders))
+                                    .font(.caption.weight(.semibold))
+                                Text(folder)
+                                    .font(.caption2)
+                                    .foregroundStyle(Theme.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer(minLength: 8)
+                            Button("Rimuovi") { removeFolder(folder) }
+                        }
+                    }
+                    Text("Run configuration di IntelliJ e Visual Studio Code").font(.subheadline)
+                    if scanned && found.isEmpty {
+                        Text("Nessuna run configuration di IntelliJ o Visual Studio Code")
+                            .foregroundStyle(Theme.secondary)
+                    }
                     ForEach(found) { runner in
                         Toggle(isOn: binding(runner.id)) {
                             VStack(alignment: .leading) {
-                                Text(runner.name)
+                                HStack(spacing: 6) {
+                                    Text(runner.name)
+                                    if let source = runner.idea?.sourceRoot {
+                                        Text(ProjectRootLabels.label(for: source, among: folders))
+                                            .font(.caption2)
+                                            .foregroundStyle(Theme.secondary)
+                                    }
+                                }
                                 if runner.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                     Text("Comando da completare").font(.caption)
                                     if let note = runner.importNote { Text(note).font(.caption2) }
@@ -594,15 +882,29 @@ private struct AddProjectSheet: View {
             HStack {
                 Button("Annulla") { onClose() }
                 Spacer()
-                Button("Runner manuale") { createManual() }.disabled(folder.isEmpty)
+                Button("Runner manuale") { createManual() }.disabled(folders.isEmpty)
                 Button("Importa selezionate") { importSelected() }
-                    .disabled(folder.isEmpty || found.filter { selected.contains($0.id) }.isEmpty)
+                    .disabled(folders.isEmpty || found.filter { selected.contains($0.id) }.isEmpty)
             }
         }
         .padding(16)
-        .frame(width: 420, height: 460)
+        .frame(width: 440)
+        .frame(maxHeight: windowMaxHeight, alignment: .top)
         .preferredColorScheme(.dark)
-        .onChange(of: folder) { _ in scanIfDirectory() }
+    }
+
+    private var windowMaxHeight: CGFloat {
+        FormWindowMetrics.maxContentHeight(
+            screenHeight: NSScreen.main?.frame.height ?? 900,
+            visibleHeight: NSScreen.main?.visibleFrame.height ?? 900
+        )
+    }
+
+    private var maxScrollHeight: CGFloat {
+        FormWindowMetrics.maxScrollHeight(
+            screenHeight: NSScreen.main?.frame.height ?? 900,
+            visibleHeight: NSScreen.main?.visibleFrame.height ?? 900
+        )
     }
 
     private func binding(_ id: UUID) -> Binding<Bool> {
@@ -612,25 +914,36 @@ private struct AddProjectSheet: View {
     }
 
     private func browse() {
-        if let url = DirectoryPicker.chooseDirectory() {
-            folder = url.path
-        }
+        guard let url = DirectoryPicker.chooseDirectory() else { return }
+        let path = Project.normalizePath(url.path)
+        guard !path.isEmpty else { return }
+        if folders.contains(path) { return }
+        folders.append(path)
+        rescan()
     }
 
-    private func scanIfDirectory() {
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: folder, isDirectory: &isDir), isDir.boolValue else {
+    private func removeFolder(_ folder: String) {
+        folders.removeAll { $0 == folder }
+        rescan()
+    }
+
+    private func rescan() {
+        guard !folders.isEmpty else {
             found = []
             selected = []
             scanned = false
             return
         }
-        let result = IdeaScanner.scan(IdeaScanRequest(
-            projectRoot: URL(fileURLWithPath: folder, isDirectory: true),
-            configRoot: model.session.configRoot,
-            userHome: model.session.userHome
-        ))
-        found = result.runners
+        var runners: [RunnerConfig] = []
+        for folder in folders {
+            let result = IdeaScanner.scan(IdeaScanRequest(
+                projectRoot: URL(fileURLWithPath: folder, isDirectory: true),
+                configRoot: model.session.configRoot,
+                userHome: model.session.userHome
+            ))
+            runners.append(contentsOf: result.runners)
+        }
+        found = runners
         selected = Set(found.map(\.id))
         scanned = true
     }
@@ -638,20 +951,23 @@ private struct AddProjectSheet: View {
     private func resolvedName() -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
-        return URL(fileURLWithPath: folder).lastPathComponent
+        guard let first = folders.first else { return "Progetto" }
+        return URL(fileURLWithPath: first).lastPathComponent
     }
 
     private func importSelected() {
+        guard let first = folders.first else { return }
         let chosen = found.filter { selected.contains($0.id) }
-        model.session.addProject(Project(name: resolvedName(), rootPath: folder, runners: chosen))
+        model.session.addProject(Project(name: resolvedName(), rootPath: first, roots: folders, runners: chosen))
         PopoverNotices.shared.show("Progetto aggiunto")
         onClose()
     }
 
     private func createManual() {
+        guard let first = folders.first else { return }
         let title = resolvedName()
-        let runner = RunnerConfig(name: title, command: "", workingDirectory: folder, debugPort: 5005)
-        model.session.addProject(Project(name: title, rootPath: folder, runners: [runner]))
+        let runner = RunnerConfig(name: title, command: "", workingDirectory: first, debugPort: 5005)
+        model.session.addProject(Project(name: title, rootPath: first, roots: folders, runners: [runner]))
         PopoverNotices.shared.show("Progetto aggiunto")
         onClose()
     }
@@ -684,29 +1000,33 @@ private struct EditRunnerSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Modifica runner").font(.headline)
-            TextField("Nome", text: $name)
-            Text("Comando").font(.caption)
-            TextEditor(text: $command).font(.system(.body, design: .monospaced)).frame(minHeight: 80)
-            HStack {
-                TextField("Cartella di lavoro", text: $workingDirectory)
-                Button("Sfoglia") {
-                    if let url = DirectoryPicker.chooseDirectory() {
-                        workingDirectory = url.path
+            MenuBarColumn(maxHeight: maxScrollHeight) {
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Nome", text: $name)
+                    Text("Comando").font(.caption)
+                    TextEditor(text: $command).font(.system(.body, design: .monospaced)).frame(minHeight: 80)
+                    HStack {
+                        TextField("Cartella di lavoro", text: $workingDirectory)
+                        Button("Sfoglia") {
+                            if let url = DirectoryPicker.chooseDirectory() {
+                                workingDirectory = url.path
+                            }
+                        }
                     }
+                    TextField("Porta da controllare", text: $portText)
+                    TextField("Porta debug", text: $debugPortText)
+                    Toggle("Debug", isOn: $debugEnabled)
+                    Text("Variabili").font(.caption)
+                    ForEach($envRows) { $row in
+                        HStack {
+                            TextField("Nome", text: $row.key)
+                            TextField("Valore", text: $row.value)
+                            Button("Rimuovi") { envRows.removeAll { $0.id == row.id } }
+                        }
+                    }
+                    Button("Aggiungi") { envRows.append(EnvRow(key: "", value: "")) }
                 }
             }
-            TextField("Porta da controllare", text: $portText)
-            TextField("Porta debug", text: $debugPortText)
-            Toggle("Debug", isOn: $debugEnabled)
-            Text("Variabili").font(.caption)
-            ForEach($envRows) { $row in
-                HStack {
-                    TextField("Nome", text: $row.key)
-                    TextField("Valore", text: $row.value)
-                    Button("Rimuovi") { envRows.removeAll { $0.id == row.id } }
-                }
-            }
-            Button("Aggiungi") { envRows.append(EnvRow(key: "", value: "")) }
             HStack {
                 Button("Annulla") { onClose() }
                 Spacer()
@@ -715,7 +1035,22 @@ private struct EditRunnerSheet: View {
         }
         .padding(16)
         .frame(width: 440)
+        .frame(maxHeight: windowMaxHeight, alignment: .top)
         .preferredColorScheme(.dark)
+    }
+
+    private var windowMaxHeight: CGFloat {
+        FormWindowMetrics.maxContentHeight(
+            screenHeight: NSScreen.main?.frame.height ?? 900,
+            visibleHeight: NSScreen.main?.visibleFrame.height ?? 900
+        )
+    }
+
+    private var maxScrollHeight: CGFloat {
+        FormWindowMetrics.maxScrollHeight(
+            screenHeight: NSScreen.main?.frame.height ?? 900,
+            visibleHeight: NSScreen.main?.visibleFrame.height ?? 900
+        )
     }
 
     private func save() {
