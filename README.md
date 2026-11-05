@@ -2,6 +2,8 @@
 
 I servizi locali, dalla barra dei menu.
 
+[Scarica per macOS](https://github.com/BlankRiku/project-runner/releases/latest) · macOS 13 o successivo · Apple Silicon e Intel
+
 Dev Runner è un’app per macOS che avvia, ferma e riavvia i progetti su cui lavori, usando le run configuration già definite in IntelliJ, PyCharm e Visual Studio Code. L’icona sta nella barra dei menu: da lì vedi cosa è acceso e agisci senza riaprire l’IDE.
 
 ## A cosa serve
@@ -48,19 +50,13 @@ Dal pannello puoi anche aprire la configurazione salvata sul Mac, terminare tutt
 
 Serve **macOS 13** o successivo. L’app gira su Apple Silicon e su Intel.
 
-Dalla cartella del progetto, su un Mac Apple Silicon con Xcode:
-
-```sh
-Scripts/package-app.sh
-```
-
-Lo script prepara entrambe le architetture e crea `dist/DevRunner.dmg`.
-
-1. Apri il disco.
-2. Trascina **Dev Runner** in **Applicazioni**.
-3. Al primo avvio, se macOS blocca l’app perché il disco non è firmato, apri **Impostazioni di Sistema → Privacy e sicurezza** e consenti l’apertura.
+1. Scarica [`DevRunner.dmg`](https://github.com/BlankRiku/project-runner/releases/latest) dalla release.
+2. Apri il disco e trascina **Dev Runner** in **Applicazioni**.
+3. Il disco della release **non è firmato**. Al primo avvio, se macOS blocca l’app, apri **Impostazioni di Sistema → Privacy e sicurezza** e consenti l’apertura.
 
 L’icona compare nella barra dei menu.
+
+Per compilare da sorgente, su un Mac Apple Silicon con Xcode: `Scripts/package-app.sh`. Lo script prepara entrambe le architetture e crea `dist/DevRunner.dmg`. I dettagli sono in [docs/sviluppo.md](docs/sviluppo.md).
 
 ## Licenza
 
