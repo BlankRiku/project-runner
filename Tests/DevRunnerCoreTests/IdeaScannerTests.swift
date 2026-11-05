@@ -174,10 +174,12 @@ final class IdeaScannerTests: XCTestCase {
             jdkTableFiles: []
         ))
         let tomcat = try XCTUnwrap(result.runners.first { $0.name == "Tomcat 9.0.41" })
-        XCTAssertEqual(
-            tomcat.command,
-            "mvn -DskipTests -q war:exploded && exec \"$CATALINA_HOME\"/bin/catalina.sh run"
-        )
+        let doc = try XCTUnwrap(tomcat.tomcatDocBase)
+        XCTAssertFalse(tomcat.command.contains("war:exploded"))
+        XCTAssertTrue(tomcat.command.contains("dependency:copy-dependencies"))
+        XCTAssertTrue(tomcat.command.contains("-DoutputDirectory=\(doc)/WEB-INF/lib"))
+        XCTAssertTrue(tomcat.command.contains("cp -R target/classes/. \(doc)/WEB-INF/classes"))
+        XCTAssertTrue(tomcat.command.hasSuffix("exec \"$CATALINA_HOME\"/bin/catalina.sh run"))
         XCTAssertNil(tomcat.importNote)
     }
 

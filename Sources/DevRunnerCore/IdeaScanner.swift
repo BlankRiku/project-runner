@@ -616,7 +616,7 @@ package enum IdeaScanner {
         case maven(String)
     }
 
-    /// IntelliJ `<method v="2">` tasks. Make plus a war-exploded artifact is one `war:exploded`, which compiles and refreshes the docBase Tomcat serves.
+    /// IntelliJ `<method v="2">` tasks. An exploded WAR is refreshed in place: Maven jars are copied, jars already in `WEB-INF/lib` stay.
     private static func beforeLaunch(element: XMLElement, request: IdeaScanRequest) -> BeforeLaunch {
         guard let method = element.elements(forName: "method").first else {
             return BeforeLaunch(commands: [], notes: [], blocked: false)
@@ -664,7 +664,7 @@ package enum IdeaScanner {
             case .compile:
                 return "\(tool) -DskipTests -q compile"
             case .exploded:
-                return "\(tool) -DskipTests -q war:exploded"
+                return explodedWarCommand(tool: tool, element: element, request: request)
             case .maven(let goal):
                 return "\(tool) \(goal)"
             }
@@ -695,6 +695,16 @@ package enum IdeaScanner {
         if exploded, !steps.contains(where: { if case .exploded = $0 { return true }; return false }) {
             steps.append(.exploded)
         }
+    }
+
+    /// `war:exploded` rewrites `WEB-INF/lib` and deletes jars that are not Maven dependencies. IntelliJ copies dependencies and leaves those jars in place.
+    private static func explodedWarCommand(tool: String, element: XMLElement, request: IdeaScanRequest) -> String {
+        let output = docBase(artifactName: artifactName(element), request: request)
+            ?? request.projectRoot.appendingPathComponent("target").path
+        let root = ShellWords.quote(output)
+        let lib = ShellWords.quote((output as NSString).appendingPathComponent("WEB-INF/lib"))
+        let classes = ShellWords.quote((output as NSString).appendingPathComponent("WEB-INF/classes"))
+        return "\(tool) -DskipTests -q compile dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory=\(lib) && mkdir -p \(classes) && cp -R target/classes/. \(classes) && if [ -d src/main/webapp ]; then cp -R src/main/webapp/. \(root); fi"
     }
 
     private static func isExplodedWar(_ name: String) -> Bool {

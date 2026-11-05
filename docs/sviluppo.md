@@ -21,7 +21,7 @@ Lo scanner legge `.idea/runConfigurations`, `.idea/workspace.xml`, `.run/*.run.x
 
 | Origine | Comando |
 | --- | --- |
-| Tomcat | `catalina.sh run`, preceduto dal Before launch quando costruisce un artifact `war exploded`. `CATALINA_HOME`, `JAVA_HOME` e `JRE_HOME` arrivano dalle impostazioni JetBrains |
+| Tomcat | `catalina.sh run`, preceduto dal Before launch quando aggiorna l’artifact `war exploded` senza cancellare i jar già presenti in `WEB-INF/lib`. `CATALINA_HOME`, `JAVA_HOME` e `JRE_HOME` arrivano dalle impostazioni JetBrains |
 | npm | `npm run <script>` |
 | Python | interprete dello SDK e script o modulo indicati nella run |
 | Flask (`Python.FlaskServer`) | `python -m flask run`, con `FLASK_APP` dal target. La porta è `FLASK_RUN_PORT`, altrimenti 5000 |
@@ -32,7 +32,7 @@ Lo scanner legge `.idea/runConfigurations`, `.idea/workspace.xml`, `.run/*.run.x
 | VS Code compound | un runner che avvia in parallelo le launch referenziate. Ogni launch resta nella propria cartella, con le proprie variabili |
 | VS Code task | `shell` e `process` usano `command` e `args`; `npm` usa `npm run <script>`. `dependsOn` entra nel comando. Una dipendenza con un’altra cartella viene eseguita lì. `gunicorn -c` legge il `bind` del file di configurazione |
 
-L’interprete Python si risolve dal nome SDK in `jdk.table.xml`. Le variabili della run e il file indicato da `ENV_FILES` (o da `envFile` in VS Code) entrano nell’ambiente del runner. Per Tomcat, Make insieme alla build di un artifact `war exploded` diventa `mvn -DskipTests -q war:exploded` davanti a `catalina.sh`; solo Make diventa `mvn -DskipTests -q compile`. Il JDK è il JRE alternativo della run, altrimenti quello di `.idea/misc.xml`. `JAVA_HOME` e `JRE_HOME` vengono riesportati dopo il profilo della shell, così non li sostituisce il Java della macchina. Gli altri Before launch di IntelliJ restano una nota. Un `preLaunchTask` di VS Code, se esiste in `tasks.json`, viene messo davanti al comando con `&&`. Si espandono solo `${workspaceFolder}`, `${workspaceRoot}`, `${workspaceFolderBasename}` e `${userHome}`.
+L’interprete Python si risolve dal nome SDK in `jdk.table.xml`. Le variabili della run e il file indicato da `ENV_FILES` (o da `envFile` in VS Code) entrano nell’ambiente del runner. Per Tomcat, Make insieme alla build di un artifact `war exploded` compila, copia le dipendenze Maven in `WEB-INF/lib` e aggiorna le classi. I jar già presenti in quella cartella restano: `war:exploded` li cancellerebbe. Solo Make diventa `mvn -DskipTests -q compile`. Il JDK è il JRE alternativo della run, altrimenti quello di `.idea/misc.xml`. `JAVA_HOME` e `JRE_HOME` vengono riesportati dopo il profilo della shell, così non li sostituisce il Java della macchina. Gli altri Before launch di IntelliJ restano una nota. Un `preLaunchTask` di VS Code, se esiste in `tasks.json`, viene messo davanti al comando con `&&`. Si espandono solo `${workspaceFolder}`, `${workspaceRoot}`, `${workspaceFolderBasename}` e `${userHome}`.
 
 Una configurazione non riconosciuta compare con il comando vuoto e una nota. Si può completare a mano: un comando modificato non viene sovrascritto da **Sincronizza**. In quel caso restano aggiornati nome, variabili e porta.
 
