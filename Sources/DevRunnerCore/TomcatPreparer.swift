@@ -74,19 +74,7 @@ enum TomcatPreparer {
         } catch {
             return .failure(.copyFailed(error.localizedDescription))
         }
-        let stored = runner.command
-        let command: String
-        if runner.commandEdited || directoryExists(docBase, fileManager) {
-            command = stored
-        } else {
-            command = "mvn -DskipTests -q war:exploded && \(stored)"
-        }
-        return .success(TomcatLaunch(command: command))
-    }
-
-    private static func directoryExists(_ path: String, _ fileManager: FileManager) -> Bool {
-        var isDir: ObjCBool = false
-        return fileManager.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+        return .success(TomcatLaunch(command: runner.command))
     }
 
     private static func contextXML(docBase: String) -> String {

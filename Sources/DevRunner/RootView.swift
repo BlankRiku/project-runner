@@ -695,6 +695,26 @@ private struct LogsView: View {
     }
 }
 
+private struct RunSelectionControls: View {
+    let count: Int
+    let selectedCount: Int
+    var selectAll: () -> Void
+    var clearAll: () -> Void
+
+    var body: some View {
+        if count > 0 {
+            HStack(spacing: 8) {
+                Button("Seleziona tutti", action: selectAll)
+                    .disabled(selectedCount == count)
+                Button("Deseleziona tutti", action: clearAll)
+                    .disabled(selectedCount == 0)
+                Spacer()
+            }
+            .controlSize(.small)
+        }
+    }
+}
+
 private struct SyncProjectSheet: View {
     @EnvironmentObject private var model: AppModel
     let projectID: UUID
@@ -711,6 +731,12 @@ private struct SyncProjectSheet: View {
                 Text("Scegli le run da tenere. Quelle deselezionate vengono rimosse; i runner manuali restano.")
                     .font(.caption)
                     .foregroundStyle(Theme.secondary)
+                RunSelectionControls(
+                    count: found.count,
+                    selectedCount: selected.count,
+                    selectAll: selectAll,
+                    clearAll: deselectAll
+                )
                 MenuBarColumn(maxHeight: maxScrollHeight) {
                     VStack(alignment: .leading, spacing: 6) {
                         if scanned && found.isEmpty {
@@ -791,6 +817,14 @@ private struct SyncProjectSheet: View {
         })
     }
 
+    private func selectAll() {
+        selected = Set(found.map(\.id))
+    }
+
+    private func deselectAll() {
+        selected = []
+    }
+
     private func scan() {
         guard project != nil else {
             found = []
@@ -852,6 +886,12 @@ private struct AddProjectSheet: View {
                         }
                     }
                     Text("Run configuration di IntelliJ e Visual Studio Code").font(.subheadline)
+                    RunSelectionControls(
+                        count: found.count,
+                        selectedCount: selected.count,
+                        selectAll: selectAll,
+                        clearAll: deselectAll
+                    )
                     if scanned && found.isEmpty {
                         Text("Nessuna run configuration di IntelliJ o Visual Studio Code")
                             .foregroundStyle(Theme.secondary)
@@ -911,6 +951,14 @@ private struct AddProjectSheet: View {
         Binding(get: { selected.contains(id) }, set: { isOn in
             if isOn { selected.insert(id) } else { selected.remove(id) }
         })
+    }
+
+    private func selectAll() {
+        selected = Set(found.map(\.id))
+    }
+
+    private func deselectAll() {
+        selected = []
     }
 
     private func browse() {

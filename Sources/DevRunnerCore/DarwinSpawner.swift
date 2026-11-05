@@ -26,6 +26,28 @@ package protocol ProcessSpawning: Sendable {
     func spawn(_ request: SpawnRequest) throws -> any SpawnedHandle
 }
 
+enum ShellLaunch {
+    /// Re-exports the runner environment after a login shell, so a profile cannot replace the project JDK.
+    static func command(environment: [String: String], command: String) -> String {
+        var environment = environment
+        let java = environment["JAVA_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !java.isEmpty {
+            let jre = environment["JRE_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if jre.isEmpty { environment["JRE_HOME"] = java }
+        }
+        let exports = environment.keys.sorted().compactMap { key -> String? in
+            guard !key.isEmpty, let value = environment[key] else { return nil }
+            return "export \(ShellWords.quote(key))=\(ShellWords.quote(value))"
+        }
+        var lines = exports
+        if !java.isEmpty {
+            lines.append("export PATH=\"$JAVA_HOME/bin:$PATH\"")
+        }
+        guard !lines.isEmpty else { return command }
+        return lines.joined(separator: "; ") + "; " + command
+    }
+}
+
 enum SpawnError: Error, Equatable, CustomStringConvertible {
     case pipe
     case setup(String)
@@ -81,7 +103,8 @@ package struct DarwinProcessSpawner: ProcessSpawning {
               posix_spawnattr_setpgroup(&attr, 0) == 0 else {
             throw SpawnError.setup("process group")
         }
-        let argv = [request.shellPath] + request.shellArguments + [request.command]
+        let command = ShellLaunch.command(environment: request.environment, command: request.command)
+        let argv = [request.shellPath] + request.shellArguments + [command]
         let env = mergedEnvironment(request.environment)
         var pid: pid_t = 0
         let code: Int32 = CStringBuffer.with(argv) { argvPtr in

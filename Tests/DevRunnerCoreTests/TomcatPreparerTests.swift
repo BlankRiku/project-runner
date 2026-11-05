@@ -8,15 +8,15 @@ final class TomcatPreparerTests: XCTestCase {
         XCTAssertEqual(TomcatPreparer.contextFileName(contextPath: "/a/b"), "a#b.xml")
     }
 
-    func testPrepareWritesContextAndPrefixesMavenUntilDocBaseExists() throws {
+    func testPrepareWritesContextAndKeepsImportedCommand() throws {
         let root = try TestSupport.makeDirectory()
         defer { TestSupport.remove(root) }
         let home = root.appendingPathComponent("tomcat")
         try TestSupport.write("ORIGINAL", to: home.appendingPathComponent("conf/server.xml"))
         let base = root.appendingPathComponent("base")
         let docBase = root.appendingPathComponent("target/ceposto-java-server").path
-        let stored = "exec \"$CATALINA_HOME\"/bin/catalina.sh run"
-        var runner = RunnerConfig(
+        let stored = "mvn -DskipTests -q war:exploded && exec \"$CATALINA_HOME\"/bin/catalina.sh run"
+        let runner = RunnerConfig(
             name: "Tomcat 9.0.41",
             command: stored,
             workingDirectory: root.path,
@@ -27,7 +27,7 @@ final class TomcatPreparerTests: XCTestCase {
             tomcatDocBase: docBase
         )
         let first = try XCTUnwrap(try TomcatPreparer.prepare(runner: runner).get())
-        XCTAssertEqual(first.command, "mvn -DskipTests -q war:exploded && \(stored)")
+        XCTAssertEqual(first.command, stored)
         let context = base.appendingPathComponent("conf/Catalina/localhost/CePosto.xml")
         let contextText = try String(contentsOf: context, encoding: .utf8)
         XCTAssertTrue(contextText.contains(docBase))
@@ -37,10 +37,6 @@ final class TomcatPreparerTests: XCTestCase {
         let second = try XCTUnwrap(try TomcatPreparer.prepare(runner: runner).get())
         XCTAssertEqual(second.command, stored)
         XCTAssertEqual(try String(contentsOf: base.appendingPathComponent("conf/server.xml"), encoding: .utf8), "EDITED")
-        runner.commandEdited = true
-        try FileManager.default.removeItem(atPath: docBase)
-        let edited = try XCTUnwrap(try TomcatPreparer.prepare(runner: runner).get())
-        XCTAssertEqual(edited.command, stored)
     }
 
     func testMissingConfDoesNotPretendSuccess() throws {

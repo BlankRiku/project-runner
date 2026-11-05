@@ -72,8 +72,8 @@ enum FormWindowMetrics {
     static let maxScreenFraction: CGFloat = 0.65
     /// Headline, paddings and the pinned footer live outside the scrolling body.
     static let outsideScroll: CGFloat = 120
-    /// Sync sheet also shows project name and a caption above the list.
-    static let syncOutsideScroll: CGFloat = 190
+    /// Sync sheet also shows project name, a caption and the select-all row above the list.
+    static let syncOutsideScroll: CGFloat = 230
 
     static func maxContentHeight(screenHeight: CGFloat, visibleHeight: CGFloat, titleBar: CGFloat = 28) -> CGFloat {
         let limit = min(screenHeight * maxScreenFraction, visibleHeight)

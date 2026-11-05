@@ -74,15 +74,23 @@ package enum VSCodeScanner {
             command = built.command
             if let note = built.note { notes.append(note) }
         }
+        let cwd = text(object, "cwd")
+        let directory = context.directory(cwd)
         let preLaunch = text(object, "preLaunchTask").trimmingCharacters(in: .whitespacesAndNewlines)
         if !preLaunch.isEmpty {
             if tasks.contains(preLaunch) {
                 let resolved = tasks.resolve(preLaunch)
                 notes.append(contentsOf: resolved.notes)
-                if resolved.command.isEmpty {
+                let prefix = ShellScript.placed(
+                    resolved.command,
+                    directory: resolved.directory,
+                    env: resolved.env,
+                    baseDirectory: directory
+                )
+                if prefix.isEmpty {
                     notes.append("preLaunchTask «\(preLaunch)» senza comando.")
                 } else if !command.isEmpty {
-                    command = ShellScript.join(resolved.command, command)
+                    command = ShellScript.join(prefix, command)
                 }
             } else {
                 notes.append("preLaunchTask «\(preLaunch)» non trovato.")
@@ -92,14 +100,14 @@ package enum VSCodeScanner {
             notes.append("Configurazione VS Code senza comando.")
         }
         let env = environment(object, context: context)
-        let cwd = text(object, "cwd")
+        let args = (list(object, "args") + list(object, "runtimeArgs")).map { context.expand($0) }
         return make(
             name: name,
             configurationType: typed("vscode.launch", type),
             command: command,
-            workingDirectory: context.directory(cwd),
+            workingDirectory: directory,
             env: env,
-            portToCheck: port(in: env),
+            portToCheck: port(in: env, args: args, command: command, cwd: directory),
             note: notes,
             sourceRoot: Project.normalizePath(context.projectRoot.path)
         )
@@ -160,9 +168,17 @@ package enum VSCodeScanner {
         guard !name.isEmpty else { return nil }
         var notes: [String] = []
         var commands: [String] = []
+        var ports: [Int] = []
+        let base = context.projectRoot.path
         for reference in references(object["configurations"]) {
             if let runner = launches[reference], !runner.command.isEmpty {
-                commands.append(runner.command)
+                commands.append(ShellScript.placed(
+                    runner.command,
+                    directory: runner.workingDirectory,
+                    env: runner.env,
+                    baseDirectory: base
+                ))
+                if let port = runner.portToCheck { ports.append(port) }
             } else if launches[reference] == nil {
                 notes.append("Compound «\(name)»: configurazione «\(reference)» non trovata.")
             }
@@ -173,9 +189,15 @@ package enum VSCodeScanner {
             if tasks.contains(preLaunch) {
                 let resolved = tasks.resolve(preLaunch)
                 notes.append(contentsOf: resolved.notes)
-                if !resolved.command.isEmpty && !command.isEmpty {
-                    command = ShellScript.join(resolved.command, command)
-                } else if resolved.command.isEmpty {
+                let prefix = ShellScript.placed(
+                    resolved.command,
+                    directory: resolved.directory,
+                    env: resolved.env,
+                    baseDirectory: base
+                )
+                if !prefix.isEmpty && !command.isEmpty {
+                    command = ShellScript.join(prefix, command)
+                } else if prefix.isEmpty {
                     notes.append("preLaunchTask «\(preLaunch)» senza comando.")
                 }
             } else {
@@ -185,15 +207,16 @@ package enum VSCodeScanner {
         if command.isEmpty && notes.isEmpty {
             notes.append("Configurazione VS Code senza comando.")
         }
+        let uniquePorts = Set(ports)
         return make(
             name: name,
             configurationType: "vscode.compound",
             command: command,
-            workingDirectory: context.projectRoot.path,
+            workingDirectory: base,
             env: environment(object, context: context),
-            portToCheck: nil,
+            portToCheck: uniquePorts.count == 1 ? uniquePorts.first : nil,
             note: notes,
-            sourceRoot: Project.normalizePath(context.projectRoot.path)
+            sourceRoot: Project.normalizePath(base)
         )
     }
 
@@ -208,7 +231,7 @@ package enum VSCodeScanner {
             command: command,
             workingDirectory: task.workingDirectory,
             env: task.env,
-            portToCheck: port(in: task.env),
+            portToCheck: task.port,
             note: notes,
             sourceRoot: task.sourceRoot
         )
@@ -257,12 +280,95 @@ package enum VSCodeScanner {
         return result
     }
 
-    private static func port(in env: [String: String]) -> Int? {
+    fileprivate static func port(in env: [String: String], args: [String] = [], command: String = "", cwd: String = "") -> Int? {
+        if let fromArgs = argumentPort(args, command: command, cwd: cwd) { return fromArgs }
         for key in ["PORT", "FLASK_RUN_PORT"] {
             let raw = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if let port = Int(raw), (1...65535).contains(port) { return port }
         }
         return nil
+    }
+
+    /// The process listens on the flag in the arguments. `--port` wins over `PORT` in the environment.
+    private static func argumentPort(_ args: [String], command: String, cwd: String) -> Int? {
+        let gunicorn = command.contains("gunicorn") || args.contains { $0.contains("gunicorn") }
+        var index = 0
+        while index < args.count {
+            let arg = args[index]
+            if let value = inlineValue(arg, names: ["--port"]) {
+                if let port = portNumber(from: value) { return port }
+            }
+            if arg == "--port", index + 1 < args.count {
+                if let port = portNumber(from: args[index + 1]) { return port }
+                index += 2
+                continue
+            }
+            if let value = inlineValue(arg, names: ["--bind", "-b"]) {
+                if let port = portNumber(from: value) { return port }
+            }
+            if (arg == "--bind" || arg == "-b"), index + 1 < args.count {
+                if let port = portNumber(from: args[index + 1]) { return port }
+                index += 2
+                continue
+            }
+            if gunicorn {
+                if let value = inlineValue(arg, names: ["--config", "-c"]) {
+                    if let port = gunicornBind(config: value, cwd: cwd) { return port }
+                }
+                if (arg == "--config" || arg == "-c"), index + 1 < args.count {
+                    if let port = gunicornBind(config: args[index + 1], cwd: cwd) { return port }
+                    index += 2
+                    continue
+                }
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func inlineValue(_ arg: String, names: [String]) -> String? {
+        for name in names where arg.hasPrefix(name + "=") {
+            return String(arg.dropFirst(name.count + 1))
+        }
+        return nil
+    }
+
+    private static func portNumber(from value: String) -> Int? {
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let port = Int(text), (1...65535).contains(port) { return port }
+        guard let colon = text.lastIndex(of: ":") else { return nil }
+        let tail = text[text.index(after: colon)...].trimmingCharacters(in: .whitespacesAndNewlines)
+        if let port = Int(tail), (1...65535).contains(port) { return port }
+        return nil
+    }
+
+    private static func gunicornBind(config: String, cwd: String) -> Int? {
+        let trimmed = config.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !cwd.isEmpty else { return nil }
+        let url = trimmed.hasPrefix("/")
+            ? URL(fileURLWithPath: trimmed)
+            : URL(fileURLWithPath: cwd, isDirectory: true).appendingPathComponent(trimmed)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        for raw in text.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            if let port = parseBindAssignment(line) { return port }
+        }
+        return nil
+    }
+
+    private static func parseBindAssignment(_ line: String) -> Int? {
+        guard line.hasPrefix("bind") else { return nil }
+        var rest = line.dropFirst(4).drop(while: { $0.isWhitespace })
+        guard rest.first == "=" else { return nil }
+        rest = rest.dropFirst().drop(while: { $0.isWhitespace })
+        if rest.first == "\"" || rest.first == "'" {
+            let quote = rest.removeFirst()
+            guard let end = rest.firstIndex(of: quote) else { return nil }
+            return portNumber(from: String(rest[..<end]))
+        }
+        let token = rest.prefix(while: { !$0.isWhitespace && $0 != "#" })
+        return portNumber(from: String(token))
     }
 
     private static func references(_ value: Any?) -> [String] {
@@ -349,6 +455,7 @@ private struct TaskDef {
     var sequence: Bool
     var workingDirectory: String
     var env: [String: String]
+    var port: Int?
     var sourceRoot: String
 
     init?(_ object: [String: Any], context: Context) {
@@ -388,8 +495,10 @@ private struct TaskDef {
         self.dependsOn = TaskDef.dependencies(object["dependsOn"])
         let order = (object["dependsOrder"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         self.sequence = order.lowercased() == "sequence"
-        self.workingDirectory = context.directory(cwd)
+        let directory = context.directory(cwd)
+        self.workingDirectory = directory
         self.env = env
+        self.port = VSCodeScanner.port(in: env, args: args, command: own, cwd: directory)
         self.sourceRoot = Project.normalizePath(context.projectRoot.path)
     }
 
@@ -422,9 +531,16 @@ private enum VSCodeScannerLabel {
     }
 }
 
+private struct ResolvedTask {
+    var command: String
+    var directory: String
+    var env: [String: String]
+    var notes: [String]
+}
+
 private final class TaskIndex {
     var tasks: [String: TaskDef]
-    private var memo: [String: (command: String, notes: [String])] = [:]
+    private var memo: [String: ResolvedTask] = [:]
 
     init(_ tasks: [TaskDef]) {
         var indexed: [String: TaskDef] = [:]
@@ -438,17 +554,17 @@ private final class TaskIndex {
         tasks[label] != nil
     }
 
-    func resolve(_ label: String) -> (command: String, notes: [String]) {
+    func resolve(_ label: String) -> ResolvedTask {
         resolve(label, stack: [])
     }
 
-    private func resolve(_ label: String, stack: Set<String>) -> (command: String, notes: [String]) {
+    private func resolve(_ label: String, stack: Set<String>) -> ResolvedTask {
         if stack.contains(label) {
-            return ("", ["Dipendenza ciclica nel task «\(label)»."])
+            return ResolvedTask(command: "", directory: "", env: [:], notes: ["Dipendenza ciclica nel task «\(label)»."])
         }
         if let cached = memo[label] { return cached }
         guard let task = tasks[label] else {
-            return ("", ["Task «\(label)» non trovato."])
+            return ResolvedTask(command: "", directory: "", env: [:], notes: ["Task «\(label)» non trovato."])
         }
         var next = stack
         next.insert(label)
@@ -457,7 +573,13 @@ private final class TaskIndex {
         for name in task.dependsOn {
             let resolved = resolve(name, stack: next)
             notes.append(contentsOf: resolved.notes)
-            if !resolved.command.isEmpty { dependencies.append(resolved.command) }
+            let placed = ShellScript.placed(
+                resolved.command,
+                directory: resolved.directory,
+                env: resolved.env,
+                baseDirectory: task.workingDirectory
+            )
+            if !placed.isEmpty { dependencies.append(placed) }
         }
         let command: String
         if task.sequence || dependencies.count <= 1 {
@@ -467,7 +589,7 @@ private final class TaskIndex {
         } else {
             command = ShellScript.join(ShellScript.parallel(dependencies), task.ownCommand)
         }
-        let result = (command, notes)
+        let result = ResolvedTask(command: command, directory: task.workingDirectory, env: task.env, notes: notes)
         memo[label] = result
         return result
     }
@@ -499,7 +621,51 @@ private enum ShellScript {
     static func parallel(_ parts: [String]) -> String {
         let cleaned = parts.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         if cleaned.count <= 1 { return cleaned.first ?? "" }
-        return cleaned.map { "(\($0))" }.joined(separator: " & ") + " & wait"
+        return cleaned.map(isolate).joined(separator: " & ") + " & wait"
+    }
+
+    /// Runs a command in its own directory and environment without changing the caller.
+    static func placed(_ command: String, directory: String, env: [String: String], baseDirectory: String) -> String {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        let sameDirectory = Project.normalizePath(directory) == Project.normalizePath(baseDirectory)
+        let assignments = env.keys.sorted().filter(isEnvName).map { key in
+            "\(key)=\(ShellWords.quote(env[key] ?? ""))"
+        }
+        if sameDirectory && assignments.isEmpty { return trimmed }
+        var steps: [String] = []
+        if !sameDirectory {
+            steps.append("cd \(ShellWords.quote(directory))")
+        }
+        if !assignments.isEmpty {
+            steps.append("export " + assignments.joined(separator: " "))
+        }
+        steps.append(group(trimmed))
+        return "(\(steps.joined(separator: " && ")))"
+    }
+
+    private static func isolate(_ command: String) -> String {
+        if isWrapped(command) { return command }
+        return "(\(command))"
+    }
+
+    private static func isWrapped(_ command: String) -> Bool {
+        guard command.first == "(", command.last == ")" else { return false }
+        var depth = 0
+        for (offset, character) in command.enumerated() {
+            if character == "(" { depth += 1 }
+            else if character == ")" {
+                depth -= 1
+                if depth == 0 { return offset == command.count - 1 }
+            }
+            if depth < 0 { return false }
+        }
+        return false
+    }
+
+    private static func isEnvName(_ key: String) -> Bool {
+        guard let first = key.first, first == "_" || (first.isASCII && first.isLetter) else { return false }
+        return key.allSatisfy { $0 == "_" || ($0.isASCII && ($0.isLetter || $0.isNumber)) }
     }
 
     private static func group(_ command: String) -> String {

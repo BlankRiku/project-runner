@@ -8,6 +8,41 @@ import XCTest
 
 #if os(macOS)
 final class ProcessGroupTests: XCTestCase {
+    func testLoginShellCannotReplaceTheProjectJdk() throws {
+        let root = try TestSupport.makeDirectory()
+        defer { TestSupport.remove(root) }
+        let zdot = root.appendingPathComponent("zdot", isDirectory: true)
+        let projectJava = root.appendingPathComponent("project-jdk").path
+        try TestSupport.write("export JAVA_HOME=/machine/jdk\nexport JRE_HOME=/machine/jdk\n", to: zdot.appendingPathComponent(".zprofile"))
+        let spawner = DarwinProcessSpawner()
+        let handle = try spawner.spawn(SpawnRequest(
+            command: "printf '%s\\n%s\\n' \"$JAVA_HOME\" \"$JRE_HOME\"",
+            workingDirectory: root.path,
+            environment: [
+                "JAVA_HOME": projectJava,
+                "ZDOTDIR": zdot.path
+            ],
+            shellPath: "/bin/zsh",
+            shellArguments: ["-l", "-c"]
+        ))
+        defer {
+            kill(-handle.pid, SIGKILL)
+            var status: Int32 = 0
+            waitpid(handle.pid, &status, WNOHANG)
+        }
+        let box = TextBox()
+        let ready = expectation(description: "java home")
+        ready.assertForOverFulfill = false
+        handle.readOutput { chunk in
+            box.append(chunk)
+            if box.text.split(whereSeparator: \.isNewline).count >= 2 { ready.fulfill() }
+        }
+        handle.onExit { _ in }
+        wait(for: [ready], timeout: 8)
+        let lines = box.text.split(whereSeparator: \.isNewline).map(String.init)
+        XCTAssertEqual(lines, [projectJava, projectJava])
+    }
+
     func testBackgroundSleepDiesWithItsGroup() throws {
         let spawner = DarwinProcessSpawner()
         let handle = try spawner.spawn(SpawnRequest(

@@ -28,6 +28,7 @@ final class IdeaScannerTests: XCTestCase {
         XCTAssertTrue(tomcat.command.hasSuffix("bin/catalina.sh run"))
         XCTAssertEqual(tomcat.env["CATALINA_HOME"], catalinaHome)
         XCTAssertEqual(tomcat.env["JAVA_HOME"], jdkHome)
+        XCTAssertEqual(tomcat.env["JRE_HOME"], jdkHome)
         XCTAssertEqual(tomcat.env["CATALINA_BASE"], layout.config.appendingPathComponent("catalina").appendingPathComponent(tomcat.id.uuidString).path)
         XCTAssertEqual(tomcat.tomcatContextPath, "/CePosto")
         XCTAssertEqual(tomcat.tomcatDocBase, layout.root.appendingPathComponent("target/ceposto-java-server").path)
@@ -83,6 +84,133 @@ final class IdeaScannerTests: XCTestCase {
         """)
         let tomcat = try scanTomcat(project)
         XCTAssertEqual(tomcat.debugPort, 5010)
+    }
+
+    func testTomcatUsesProjectJdkWhenTheRunConfigurationDoesNotOverrideIt() throws {
+        let project = try writeTomcatWorkspace(extra: """
+              <deployment>
+                <artifact name="ceposto-java-server:war exploded">
+                  <settings>
+                    <option name="CONTEXT_PATH" value="/CePosto" />
+                  </settings>
+                </artifact>
+              </deployment>
+        """)
+        let projectJava = root.appendingPathComponent("jdks/1.8/Contents/Home")
+        let machineJava = root.appendingPathComponent("jdks/21/Contents/Home")
+        try FileManager.default.createDirectory(at: projectJava, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: machineJava, withIntermediateDirectories: true)
+        try TestSupport.write("""
+        <project version="4">
+          <component name="ProjectRootManager" project-jdk-name="corretto-1.8" project-jdk-type="JavaSDK" />
+        </project>
+        """, to: project.appendingPathComponent(".idea/misc.xml"))
+        let servers = root.appendingPathComponent("applicationServers.xml")
+        let jdks = root.appendingPathComponent("jdk.table.xml")
+        try TestSupport.write("""
+        <application><component name="ApplicationServersManager"><ServerSettings><option name="SERVERS"><list>
+          <ServerSettingsImpl>
+            <option name="NAME" value="Tomcat 9.0.41" />
+            <option name="HOME" value="\(catalinaHome)" />
+          </ServerSettingsImpl>
+        </list></option></ServerSettings></component></application>
+        """, to: servers)
+        try TestSupport.write("""
+        <application><component name="ProjectJdkTable">
+          <jdk version="2">
+            <name value="corretto-1.8" />
+            <homePath value="\(projectJava.path)" />
+          </jdk>
+          <jdk version="2">
+            <name value="corretto-21" />
+            <homePath value="\(machineJava.path)" />
+          </jdk>
+        </component></application>
+        """, to: jdks)
+        let result = IdeaScanner.scan(IdeaScanRequest(
+            projectRoot: project,
+            configRoot: root.appendingPathComponent("config-root"),
+            userHome: root,
+            applicationServersFiles: [servers],
+            jdkTableFiles: [jdks]
+        ))
+        let tomcat = try XCTUnwrap(result.runners.first { $0.name == "Tomcat 9.0.41" })
+        XCTAssertEqual(tomcat.env["JAVA_HOME"], projectJava.path)
+        XCTAssertEqual(tomcat.env["JRE_HOME"], projectJava.path)
+        XCTAssertNil(tomcat.importNote)
+    }
+
+    func testTomcatBeforeLaunchBuildsExplodedWarOnEveryImport() throws {
+        let project = try writeTomcatWorkspace(extra: """
+              <deployment>
+                <artifact name="ceposto-java-server:war exploded">
+                  <settings>
+                    <option name="CONTEXT_PATH" value="/CePosto" />
+                  </settings>
+                </artifact>
+              </deployment>
+              <method v="2">
+                <option name="MakeProject" enabled="true" />
+                <option name="BuildArtifacts" enabled="true">
+                  <artifact name="ceposto-java-server:war exploded" />
+                </option>
+                <option name="Make" enabled="false" />
+              </method>
+        """)
+        let servers = root.appendingPathComponent("applicationServers.xml")
+        try TestSupport.write("""
+        <application><component name="ApplicationServersManager"><ServerSettings><option name="SERVERS"><list>
+          <ServerSettingsImpl>
+            <option name="NAME" value="Tomcat 9.0.41" />
+            <option name="HOME" value="\(catalinaHome)" />
+          </ServerSettingsImpl>
+        </list></option></ServerSettings></component></application>
+        """, to: servers)
+        let result = IdeaScanner.scan(IdeaScanRequest(
+            projectRoot: project,
+            configRoot: root.appendingPathComponent("config-root"),
+            userHome: root,
+            applicationServersFiles: [servers],
+            jdkTableFiles: []
+        ))
+        let tomcat = try XCTUnwrap(result.runners.first { $0.name == "Tomcat 9.0.41" })
+        XCTAssertEqual(
+            tomcat.command,
+            "mvn -DskipTests -q war:exploded && exec \"$CATALINA_HOME\"/bin/catalina.sh run"
+        )
+        XCTAssertNil(tomcat.importNote)
+    }
+
+    func testTomcatBeforeLaunchMakeOnlyCompiles() throws {
+        let project = try writeTomcatWorkspace(extra: """
+              <method v="2">
+                <option name="MakeProject" enabled="true" />
+                <option name="BuildArtifacts" enabled="false">
+                  <artifact name="ceposto-java-server:war exploded" />
+                </option>
+              </method>
+        """)
+        let servers = root.appendingPathComponent("applicationServers.xml")
+        try TestSupport.write("""
+        <application><component name="ApplicationServersManager"><ServerSettings><option name="SERVERS"><list>
+          <ServerSettingsImpl>
+            <option name="NAME" value="Tomcat 9.0.41" />
+            <option name="HOME" value="\(catalinaHome)" />
+          </ServerSettingsImpl>
+        </list></option></ServerSettings></component></application>
+        """, to: servers)
+        let result = IdeaScanner.scan(IdeaScanRequest(
+            projectRoot: project,
+            configRoot: root.appendingPathComponent("config-root"),
+            userHome: root,
+            applicationServersFiles: [servers],
+            jdkTableFiles: []
+        ))
+        let tomcat = try XCTUnwrap(result.runners.first { $0.name == "Tomcat 9.0.41" })
+        XCTAssertEqual(
+            tomcat.command,
+            "mvn -DskipTests -q compile && exec \"$CATALINA_HOME\"/bin/catalina.sh run"
+        )
     }
 
     func testMissingServerYieldsEmptyCommand() throws {

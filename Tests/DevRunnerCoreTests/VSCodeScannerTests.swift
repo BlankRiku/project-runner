@@ -274,6 +274,107 @@ final class VSCodeScannerTests: XCTestCase {
         XCTAssertEqual(scan().runners.first?.command, "echo 'hello world'")
     }
 
+    func testFlaskWorkspaceLaunchesKeepDirectoryPortAndEnvironment() throws {
+        try TestSupport.write("bind = \"0.0.0.0:5000\"\n", to: root.appendingPathComponent("main-service/gunicorn_config.py"))
+        try TestSupport.write("# bind = \"9\"\nbind = '127.0.0.1:5001'\n", to: root.appendingPathComponent("mqtt-service/gunicorn_config.py"))
+        try writeLaunch("""
+        {"configurations":[
+          {
+            "name":"main-service-flask-debug",
+            "type":"debugpy",
+            "request":"launch",
+            "python":"${workspaceFolder}/main-service/.venv/bin/python",
+            "module":"flask",
+            "cwd":"${workspaceFolder}/main-service",
+            "preLaunchTask":"Deps: pip-sync main-service",
+            "env":{"FLASK_APP":"app.py","FLASK_DEBUG":"1"},
+            "args":["run","--host=127.0.0.1","--port=5000","--no-debugger","--no-reload"]
+          },
+          {
+            "name":"mqtt-service-flask-debug",
+            "type":"debugpy",
+            "request":"launch",
+            "python":"${workspaceFolder}/mqtt-service/.venv/bin/python",
+            "module":"flask",
+            "cwd":"${workspaceFolder}/mqtt-service",
+            "env":{"FLASK_APP":"app.py"},
+            "args":["run","--port=5001"]
+          }
+        ],
+        "compounds":[{
+          "name":"Flask Debug: all microservices",
+          "configurations":["main-service-flask-debug","mqtt-service-flask-debug"]
+        }]}
+        """)
+        try writeTasks("""
+        {"tasks":[
+          {
+            "label":"Deps: pip-sync main-service",
+            "type":"shell",
+            "command":"./.venv/bin/pip-sync",
+            "args":["requirements.txt"],
+            "options":{"cwd":"${workspaceFolder}/main-service"}
+          },
+          {
+            "label":"Gunicorn: main-service",
+            "type":"shell",
+            "command":"./.venv/bin/gunicorn",
+            "args":["-c","gunicorn_config.py","wsgi:app"],
+            "options":{"cwd":"${workspaceFolder}/main-service","env":{"NO_PROXY":"*"}}
+          },
+          {
+            "label":"Gunicorn: mqtt-service",
+            "type":"shell",
+            "command":"./.venv/bin/gunicorn",
+            "args":["-c","gunicorn_config.py","wsgi:app"],
+            "options":{"cwd":"${workspaceFolder}/mqtt-service"}
+          },
+          {
+            "label":"Gunicorn: all microservices",
+            "dependsOrder":"parallel",
+            "dependsOn":["Gunicorn: main-service","Gunicorn: mqtt-service"]
+          }
+        ]}
+        """)
+
+        let result = scan()
+        let main = try XCTUnwrap(result.runners.first { $0.name == "main-service-flask-debug" })
+        XCTAssertEqual(main.workingDirectory, root.appendingPathComponent("main-service").path)
+        XCTAssertEqual(main.portToCheck, 5000)
+        XCTAssertEqual(main.env["FLASK_APP"], "app.py")
+        XCTAssertEqual(
+            main.command,
+            "./.venv/bin/pip-sync requirements.txt && \(root.path)/main-service/.venv/bin/python -m flask run '--host=127.0.0.1' '--port=5000' --no-debugger --no-reload"
+        )
+        XCTAssertNil(main.importNote)
+
+        let mqtt = try XCTUnwrap(result.runners.first { $0.name == "mqtt-service-flask-debug" })
+        XCTAssertEqual(mqtt.portToCheck, 5001)
+        XCTAssertEqual(mqtt.workingDirectory, root.appendingPathComponent("mqtt-service").path)
+
+        let compound = try XCTUnwrap(result.runners.first { $0.name == "Flask Debug: all microservices" })
+        XCTAssertNil(compound.portToCheck)
+        XCTAssertEqual(compound.workingDirectory, root.path)
+        XCTAssertEqual(
+            compound.command,
+            "(cd \(root.path)/main-service && export FLASK_APP=app.py FLASK_DEBUG=1 && ./.venv/bin/pip-sync requirements.txt && \(root.path)/main-service/.venv/bin/python -m flask run '--host=127.0.0.1' '--port=5000' --no-debugger --no-reload) & (cd \(root.path)/mqtt-service && export FLASK_APP=app.py && \(root.path)/mqtt-service/.venv/bin/python -m flask run '--port=5001') & wait"
+        )
+
+        let gunicorn = try XCTUnwrap(result.runners.first { $0.name == "Gunicorn: main-service" })
+        XCTAssertEqual(gunicorn.portToCheck, 5000)
+        XCTAssertEqual(gunicorn.workingDirectory, root.appendingPathComponent("main-service").path)
+        XCTAssertEqual(gunicorn.env["NO_PROXY"], "*")
+        XCTAssertEqual(gunicorn.command, "./.venv/bin/gunicorn -c gunicorn_config.py wsgi:app")
+
+        let all = try XCTUnwrap(result.runners.first { $0.name == "Gunicorn: all microservices" })
+        XCTAssertNil(all.portToCheck)
+        XCTAssertEqual(
+            all.command,
+            "(cd \(root.path)/main-service && export NO_PROXY='*' && ./.venv/bin/gunicorn -c gunicorn_config.py wsgi:app) & (cd \(root.path)/mqtt-service && ./.venv/bin/gunicorn -c gunicorn_config.py wsgi:app) & wait"
+        )
+        XCTAssertEqual(result.runners.first { $0.name == "Gunicorn: mqtt-service" }?.portToCheck, 5001)
+    }
+
     func testIdeaRunnersStayAheadOfVSCodeInTheSameScan() throws {
         try TestSupport.write("""
         <component name="ProjectRunConfigurationManager">

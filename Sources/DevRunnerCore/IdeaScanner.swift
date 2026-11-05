@@ -136,10 +136,10 @@ package enum IdeaScanner {
             if goals(element).isEmpty {
                 return mapUnmapped(element: element, name: name, type: type, request: request)
             }
-            return mapMaven(element: element, name: name, type: type, request: request)
+            return mapMaven(element: element, name: name, type: type, request: request, jdks: jdks)
         }
         if type.localizedCaseInsensitiveContains("Spring") && !goals(element).isEmpty {
-            return mapMaven(element: element, name: name, type: type, request: request)
+            return mapMaven(element: element, name: name, type: type, request: request, jdks: jdks)
         }
         if type.localizedCaseInsensitiveContains("Spring") {
             return mapSpringBoot(element: element, name: name, type: type, request: request, jdks: jdks)
@@ -158,32 +158,25 @@ package enum IdeaScanner {
         let id = UUID()
         let serverName = element.attribute(forName: "APPLICATION_SERVER_NAME")?.stringValue ?? ""
         let home = JetBrainsLookup.catalinaHome(serverName: serverName, files: servers, projectRoot: request.projectRoot, userHome: request.userHome)
-        let jreEnabled = element.attribute(forName: "ALTERNATIVE_JRE_ENABLED")?.stringValue == "true"
-        let jrePath = element.attribute(forName: "ALTERNATIVE_JRE_PATH")?.stringValue ?? ""
         var notes: [String] = []
         if home == nil {
             notes.append("Server Tomcat non trovato in applicationServers.xml.")
         }
-        var javaHome: String?
-        if jreEnabled && !jrePath.isEmpty {
-            if let resolved = JetBrainsLookup.jdkHome(name: jrePath, files: jdks, projectRoot: request.projectRoot, userHome: request.userHome) {
-                javaHome = resolved
-            } else {
-                notes.append("JRE «\(jrePath)» non trovato in jdk.table.xml.")
-            }
-        }
         var env = environment(element, request: request)
         if let home { env["CATALINA_HOME"] = home }
         env["CATALINA_BASE"] = request.configRoot.appendingPathComponent("catalina").appendingPathComponent(id.uuidString).path
-        if let javaHome { env["JAVA_HOME"] = javaHome }
+        applyJavaHome(element: element, request: request, jdks: jdks, env: &env, notes: &notes)
         let vm = MacroExpander.expand(vmParameters(element), projectRoot: request.projectRoot, userHome: request.userHome)
         appendVar("CATALINA_OPTS", value: vm, env: &env)
+        let before = beforeLaunch(element: element, request: request)
         var command = ""
-        if home != nil && notes.isEmpty {
-            command = "exec \"$CATALINA_HOME\"/bin/catalina.sh run"
+        if home != nil && notes.isEmpty && !before.blocked {
+            var launch = "exec \"$CATALINA_HOME\"/bin/catalina.sh run"
             let params = programParameters(element, request: request)
-            if !params.isEmpty { command += " " + params }
+            if !params.isEmpty { launch += " " + params }
+            command = (before.commands + [launch]).joined(separator: " && ")
         }
+        notes.append(contentsOf: before.notes)
         let artifact = artifactName(element)
         let context = {
             let raw = (option(element, "CONTEXT_PATH") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -384,10 +377,9 @@ package enum IdeaScanner {
         var env = environment(element, request: request)
         let vm = MacroExpander.expand(vmParameters(element), projectRoot: request.projectRoot, userHome: request.userHome)
         appendVar("JAVA_TOOL_OPTIONS", value: vm, env: &env)
-        if let jdkName = projectJdkName(request.projectRoot),
-           let home = JetBrainsLookup.jdkHome(name: jdkName, files: jdks, projectRoot: request.projectRoot, userHome: request.userHome) {
-            env["JAVA_HOME"] = home
-        }
+        var notes: [String] = []
+        if let note, !note.isEmpty { notes.append(note) }
+        applyJavaHome(element: element, request: request, jdks: jdks, env: &env, notes: &notes)
         return RunnerConfig(
             name: name,
             command: command,
@@ -395,11 +387,11 @@ package enum IdeaScanner {
             env: env,
             idea: origin(name: name, type: type, adapter: .maven, request: request),
             debugInjection: .javaToolOptions,
-            importNote: note
+            importNote: notes.isEmpty ? nil : notes.joined(separator: " ")
         )
     }
 
-    private static func mapMaven(element: XMLElement, name: String, type: String, request: IdeaScanRequest) -> RunnerConfig {
+    private static func mapMaven(element: XMLElement, name: String, type: String, request: IdeaScanRequest, jdks: [URL]) -> RunnerConfig {
         let goalList = goals(element)
         let tool: String
         switch resolveMaven(request) {
@@ -422,14 +414,38 @@ package enum IdeaScanner {
         var env = environment(element, request: request)
         let vm = MacroExpander.expand(vmParameters(element), projectRoot: request.projectRoot, userHome: request.userHome)
         appendVar("JAVA_TOOL_OPTIONS", value: vm, env: &env)
+        var notes: [String] = []
+        applyJavaHome(element: element, request: request, jdks: jdks, env: &env, notes: &notes)
         return RunnerConfig(
             name: name,
             command: command,
             workingDirectory: workingDirectory(element, request: request),
             env: env,
             idea: origin(name: name, type: type, adapter: .maven, request: request),
-            debugInjection: .javaToolOptions
+            debugInjection: .javaToolOptions,
+            importNote: notes.isEmpty ? nil : notes.joined(separator: " ")
         )
+    }
+
+    /// Run configuration JRE when enabled, otherwise the project SDK from `.idea/misc.xml`.
+    private static func applyJavaHome(
+        element: XMLElement,
+        request: IdeaScanRequest,
+        jdks: [URL],
+        env: inout [String: String],
+        notes: inout [String]
+    ) {
+        let alternative = element.attribute(forName: "ALTERNATIVE_JRE_ENABLED")?.stringValue == "true"
+        let alternativeName = element.attribute(forName: "ALTERNATIVE_JRE_PATH")?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let name = alternative && !alternativeName.isEmpty ? alternativeName : projectJdkName(request.projectRoot)
+        guard let name, !name.isEmpty else { return }
+        guard let home = JetBrainsLookup.jdkHome(name: name, files: jdks, projectRoot: request.projectRoot, userHome: request.userHome) else {
+            notes.append("JRE «\(name)» non trovato in jdk.table.xml.")
+            return
+        }
+        env["JAVA_HOME"] = home
+        env["JRE_HOME"] = home
     }
 
     private static func mapUnmapped(element: XMLElement, name: String, type: String, request: IdeaScanRequest) -> RunnerConfig {
@@ -586,6 +602,104 @@ package enum IdeaScanner {
             return "Application con sola main class: il classpath di IntelliJ non è un comando di shell."
         }
         return "Tipo di configurazione non mappato."
+    }
+
+    private struct BeforeLaunch {
+        var commands: [String]
+        var notes: [String]
+        var blocked: Bool
+    }
+
+    private enum BeforeStep {
+        case compile
+        case exploded
+        case maven(String)
+    }
+
+    /// IntelliJ `<method v="2">` tasks. Make plus a war-exploded artifact is one `war:exploded`, which compiles and refreshes the docBase Tomcat serves.
+    private static func beforeLaunch(element: XMLElement, request: IdeaScanRequest) -> BeforeLaunch {
+        guard let method = element.elements(forName: "method").first else {
+            return BeforeLaunch(commands: [], notes: [], blocked: false)
+        }
+        var steps: [BeforeStep] = []
+        var notes: [String] = []
+        for option in method.elements(forName: "option") {
+            if option.attribute(forName: "enabled")?.stringValue == "false" { continue }
+            let name = option.attribute(forName: "name")?.stringValue ?? ""
+            switch name {
+            case "Make", "MakeProject", "Build":
+                steps.append(.compile)
+            case "BuildArtifacts":
+                appendArtifactBuild(option, steps: &steps, notes: &notes)
+            case "Maven.BeforeRunTask":
+                let goal = (option.attribute(forName: "goal")?.stringValue ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if goal.isEmpty {
+                    notes.append("Before launch Maven senza goal.")
+                } else {
+                    steps.append(.maven(goal))
+                }
+            default:
+                if !name.isEmpty {
+                    notes.append("Before launch «\(name)» non replicato.")
+                }
+            }
+        }
+        if steps.contains(where: { if case .exploded = $0 { return true }; return false }) {
+            steps.removeAll { if case .compile = $0 { return true }; return false }
+        }
+        if steps.isEmpty {
+            return BeforeLaunch(commands: [], notes: notes, blocked: false)
+        }
+        let tool: String
+        switch resolveMaven(request) {
+        case .command(let value):
+            tool = value
+        case .missing(let message):
+            notes.append(message)
+            return BeforeLaunch(commands: [], notes: notes, blocked: true)
+        }
+        let commands = steps.map { step -> String in
+            switch step {
+            case .compile:
+                return "\(tool) -DskipTests -q compile"
+            case .exploded:
+                return "\(tool) -DskipTests -q war:exploded"
+            case .maven(let goal):
+                return "\(tool) \(goal)"
+            }
+        }
+        return BeforeLaunch(commands: commands, notes: notes, blocked: false)
+    }
+
+    private static func appendArtifactBuild(_ option: XMLElement, steps: inout [BeforeStep], notes: inout [String]) {
+        let artifacts = option.elements(forName: "artifact").compactMap { node -> String? in
+            let value = node.attribute(forName: "name")?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return value.isEmpty ? nil : value
+        }
+        if artifacts.isEmpty {
+            if !steps.contains(where: { if case .exploded = $0 { return true }; return false }) {
+                steps.append(.exploded)
+            }
+            return
+        }
+        var exploded = false
+        for artifact in artifacts {
+            if isExplodedWar(artifact) {
+                exploded = true
+            } else {
+                notes.append("Before launch Build «\(artifact)» non replicato.")
+            }
+        }
+        if exploded, !steps.contains(where: { if case .exploded = $0 { return true }; return false }) {
+            steps.append(.exploded)
+        }
+    }
+
+    private static func isExplodedWar(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return lower.contains("war exploded") || lower.contains("exploded-war") || lower.hasSuffix(":exploded")
     }
 
     private static func docBase(artifactName: String?, request: IdeaScanRequest) -> String? {
