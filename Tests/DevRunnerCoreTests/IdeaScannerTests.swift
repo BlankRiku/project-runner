@@ -2,13 +2,15 @@ import XCTest
 @testable import DevRunnerCore
 
 final class IdeaScannerTests: XCTestCase {
-    private let catalinaHome = "/Users/dev/Documents/Progetti/apache-tomcat-9.0.41"
-    private let jdkHome = "/Library/Java/JavaVirtualMachines/corretto-1.8.jdk/Contents/Home"
+    private var paths: TestPaths!
+    private var catalinaHome: String { paths.catalinaHome }
+    private var jdkHome: String { paths.javaHome }
     private var root: URL!
 
-    override func setUp() {
-        super.setUp()
-        root = try! TestSupport.makeDirectory()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        paths = try TestPaths.load()
+        root = try TestSupport.makeDirectory()
     }
 
     override func tearDown() {
@@ -429,7 +431,7 @@ final class IdeaScannerTests: XCTestCase {
         IdeaScanRequest(
             projectRoot: layout.root,
             configRoot: layout.config,
-            userHome: URL(fileURLWithPath: "/Users/dev"),
+            userHome: paths.home,
             applicationServersFiles: servers,
             jdkTableFiles: jdks
         )

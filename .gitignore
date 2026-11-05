@@ -3,6 +3,7 @@ dist/
 dist-signed/
 .swiftpm/
 .DS_Store
+.env
 
 docs/superpowers
 

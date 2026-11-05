@@ -2,11 +2,13 @@ import XCTest
 @testable import DevRunnerCore
 
 final class JetBrainsLookupTests: XCTestCase {
+    private var paths: TestPaths!
     private var root: URL!
 
-    override func setUp() {
-        super.setUp()
-        root = try! TestSupport.makeDirectory()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        paths = try TestPaths.load()
+        root = try TestSupport.makeDirectory()
     }
 
     override func tearDown() {
@@ -25,7 +27,7 @@ final class JetBrainsLookupTests: XCTestCase {
                 <list>
                   <ServerSettingsImpl>
                     <option name="NAME" value="Tomcat 9.0.41" />
-                    <option name="HOME" value="/Users/dev/Documents/Progetti/apache-tomcat-9.0.41" />
+                    <option name="HOME" value="\(paths.catalinaHome)" />
                   </ServerSettingsImpl>
                 </list>
               </option>
@@ -38,20 +40,20 @@ final class JetBrainsLookupTests: XCTestCase {
           <component name="ProjectJdkTable">
             <jdk version="2">
               <name value="corretto-1.8" />
-              <homePath value="$USER_HOME$/Library/Java/JavaVirtualMachines/corretto-1.8.jdk/Contents/Home" />
+              <homePath value="\(paths.userHomeMacro(paths.javaHome))" />
             </jdk>
           </component>
         </application>
         """, to: jdks)
-        let home = URL(fileURLWithPath: "/Users/dev")
+        let home = paths.home
         let project = URL(fileURLWithPath: "/proj")
         XCTAssertEqual(
             JetBrainsLookup.catalinaHome(serverName: "Tomcat 9.0.41", files: [servers], projectRoot: project, userHome: home),
-            "/Users/dev/Documents/Progetti/apache-tomcat-9.0.41"
+            paths.catalinaHome
         )
         XCTAssertEqual(
             JetBrainsLookup.jdkHome(name: "corretto-1.8", files: [jdks], projectRoot: project, userHome: home),
-            "/Users/dev/Library/Java/JavaVirtualMachines/corretto-1.8.jdk/Contents/Home"
+            paths.javaHome
         )
         XCTAssertNil(JetBrainsLookup.catalinaHome(serverName: "Manca", files: [servers], projectRoot: project, userHome: home))
     }
@@ -63,17 +65,17 @@ final class JetBrainsLookupTests: XCTestCase {
           <component name="AppserversManager">
             <ServerDK NAME="Tomcat 9.0.41">
               <DATA>
-                <option name="CATALINA_HOME" value="$USER_HOME$/Documents/Progetti/apache-tomcat-9.0.41" />
+                <option name="CATALINA_HOME" value="\(paths.userHomeMacro(paths.catalinaHome))" />
               </DATA>
             </ServerDK>
           </component>
         </application>
         """, to: servers)
-        let home = URL(fileURLWithPath: "/Users/dev")
+        let home = paths.home
         let project = URL(fileURLWithPath: "/proj")
         XCTAssertEqual(
             JetBrainsLookup.catalinaHome(serverName: "Tomcat 9.0.41", files: [servers], projectRoot: project, userHome: home),
-            "/Users/dev/Documents/Progetti/apache-tomcat-9.0.41"
+            paths.catalinaHome
         )
         XCTAssertEqual(
             JetBrainsLookup.jdkHome(name: "/opt/java", files: [], projectRoot: project, userHome: home),
@@ -98,6 +100,6 @@ final class JetBrainsLookupTests: XCTestCase {
     func testShellQuoteLeavesSafeTokens() {
         XCTAssertEqual(ShellWords.quote("dev"), "dev")
         XCTAssertEqual(ShellWords.quote("a b"), "'a b'")
-        XCTAssertEqual(MacroExpander.expand("$PROJECT_DIR$/app.py", projectRoot: URL(fileURLWithPath: "/proj"), userHome: URL(fileURLWithPath: "/Users/dev")), "/proj/app.py")
+        XCTAssertEqual(MacroExpander.expand("$PROJECT_DIR$/app.py", projectRoot: URL(fileURLWithPath: "/proj"), userHome: paths.home), "/proj/app.py")
     }
 }

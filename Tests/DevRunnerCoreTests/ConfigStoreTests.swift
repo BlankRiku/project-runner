@@ -2,11 +2,13 @@ import XCTest
 @testable import DevRunnerCore
 
 final class ConfigStoreTests: XCTestCase {
+    private var paths: TestPaths!
     private var root: URL!
 
-    override func setUp() {
-        super.setUp()
-        root = try! TestSupport.makeDirectory()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        paths = try TestPaths.load()
+        root = try TestSupport.makeDirectory()
     }
 
     override func tearDown() {
@@ -60,18 +62,21 @@ final class ConfigStoreTests: XCTestCase {
 
     func testCePostoShapedDocumentIsNotDropped() throws {
         let url = root.appendingPathComponent("config.json")
-        try TestSupport.write(cePostoJSON, to: url)
+        let rootPath = paths.home.appendingPathComponent("sample/ceposto-java-server").path
+        try TestSupport.write(cePostoJSON(paths: paths, rootPath: rootPath), to: url)
         var store = ConfigStore(fileURL: url)
         let projects = store.load()
         XCTAssertFalse(store.isCorrupt)
         XCTAssertEqual(projects.map(\.name), ["ceposto"])
-        XCTAssertEqual(projects.first?.rootPath, "/Users/dev/Desktop/dev/ceposto/ceposto-java-server")
+        XCTAssertEqual(projects.first?.rootPath, rootPath)
         let runner = try XCTUnwrap(projects.first?.runners.first)
         XCTAssertEqual(runner.id, UUID(uuidString: "2AE60F9B-518D-405A-BEBD-95FB5397B83D"))
         XCTAssertEqual(runner.name, "Tomcat 9.0.41")
         XCTAssertEqual(runner.portToCheck, 8080)
-        XCTAssertEqual(runner.workingDirectory, "/Users/dev/Desktop/dev/ceposto/ceposto-java-server")
+        XCTAssertEqual(runner.workingDirectory, rootPath)
         XCTAssertEqual(runner.command, "exec \"$CATALINA_HOME\"/bin/catalina.sh run")
+        XCTAssertEqual(runner.env["CATALINA_HOME"], paths.catalinaHome)
+        XCTAssertEqual(runner.env["JAVA_HOME"], paths.javaHome)
         XCTAssertEqual(runner.idea?.adapter, .tomcat)
     }
 
@@ -88,39 +93,43 @@ final class ConfigStoreTests: XCTestCase {
     }
 }
 
-private let cePostoJSON = #"""
-{
-  "projects" : [
+private func cePostoJSON(paths: TestPaths, rootPath: String) -> String {
+    let catalinaBase = paths.home.appendingPathComponent(".config/dev-runner/catalina/2AE60F9B-518D-405A-BEBD-95FB5397B83D").path
+    let docBase = URL(fileURLWithPath: rootPath).appendingPathComponent("target/ceposto-java-server").path
+    return """
     {
-      "id" : "9DE1B3A5-0396-415E-897D-22C13664E2B8",
-      "name" : "ceposto",
-      "rootPath" : "\/Users\/dev\/Desktop\/dev\/ceposto\/ceposto-java-server",
-      "runners" : [
+      "projects" : [
         {
-          "command" : "exec \"$CATALINA_HOME\"\/bin\/catalina.sh run",
-          "commandEdited" : false,
-          "debugEnabled" : false,
-          "debugInjection" : "catalinaOpts",
-          "debugPort" : 53894,
-          "env" : {
-            "CATALINA_BASE" : "\/Users\/dev\/.config\/dev-runner\/catalina\/2AE60F9B-518D-405A-BEBD-95FB5397B83D",
-            "CATALINA_HOME" : "\/Users\/dev\/Documents\/Progetti\/apache-tomcat-9.0.41",
-            "JAVA_HOME" : "\/Users\/dev\/Library\/Java\/JavaVirtualMachines\/corretto-1.8.0_452\/Contents\/Home"
-          },
-          "id" : "2AE60F9B-518D-405A-BEBD-95FB5397B83D",
-          "idea" : {
-            "adapter" : "tomcat",
-            "configurationName" : "Tomcat 9.0.41",
-            "configurationType" : "#com.intellij.j2ee.web.tomcat.TomcatRunConfigurationFactory"
-          },
-          "name" : "Tomcat 9.0.41",
-          "portToCheck" : 8080,
-          "tomcatContextPath" : "\/CePosto",
-          "tomcatDocBase" : "\/Users\/dev\/Desktop\/dev\/ceposto\/ceposto-java-server\/target\/ceposto-java-server",
-          "workingDirectory" : "\/Users\/dev\/Desktop\/dev\/ceposto\/ceposto-java-server"
+          "id" : "9DE1B3A5-0396-415E-897D-22C13664E2B8",
+          "name" : "ceposto",
+          "rootPath" : "\(rootPath)",
+          "runners" : [
+            {
+              "command" : "exec \\"$CATALINA_HOME\\"/bin/catalina.sh run",
+              "commandEdited" : false,
+              "debugEnabled" : false,
+              "debugInjection" : "catalinaOpts",
+              "debugPort" : 53894,
+              "env" : {
+                "CATALINA_BASE" : "\(catalinaBase)",
+                "CATALINA_HOME" : "\(paths.catalinaHome)",
+                "JAVA_HOME" : "\(paths.javaHome)"
+              },
+              "id" : "2AE60F9B-518D-405A-BEBD-95FB5397B83D",
+              "idea" : {
+                "adapter" : "tomcat",
+                "configurationName" : "Tomcat 9.0.41",
+                "configurationType" : "#com.intellij.j2ee.web.tomcat.TomcatRunConfigurationFactory"
+              },
+              "name" : "Tomcat 9.0.41",
+              "portToCheck" : 8080,
+              "tomcatContextPath" : "/CePosto",
+              "tomcatDocBase" : "\(docBase)",
+              "workingDirectory" : "\(rootPath)"
+            }
+          ]
         }
       ]
     }
-  ]
+    """
 }
-"""#
