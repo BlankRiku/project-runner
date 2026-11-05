@@ -1,0 +1,9 @@
+.build/
+dist/
+dist-signed/
+.swiftpm/
+.DS_Store
+
+docs/superpowers
+
+.cursor

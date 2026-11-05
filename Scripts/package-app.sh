@@ -1,0 +1,15 @@
+#!/bin/zsh
+set -euo pipefail
+cd "$(dirname "$0")/.."
+APP="dist/DevRunner.app"
+DMG="dist/DevRunner.dmg"
+rm -f "$DMG"
+Scripts/assemble-app.sh "$APP"
+stage="$(mktemp -d)"
+cp -R "$APP" "$stage/Dev Runner.app"
+ln -s /Applications "$stage/Applications"
+hdiutil create -volname "Dev Runner" -srcfolder "$stage" -ov -format UDZO "$DMG"
+rm -rf "$stage"
+echo "Created $APP"
+echo "Created $DMG"
+lipo -info "$APP/Contents/MacOS/DevRunner"
